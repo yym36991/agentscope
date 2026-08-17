@@ -1,0 +1,15 @@
+[
+  {
+    "name": "meerflow-demo",
+    "is_stateful": false,
+    "mcp_config": {
+      "type": "http_mcp",
+      "url": "http://127.0.0.1:8080/mcp",
+      "headers": null,
+      "timeout": 30.0
+    },
+    "enable_tools": null,
+    "disable_tools": null,
+    "execution_timeout": null
+  }
+]

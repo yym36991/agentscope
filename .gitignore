@@ -164,3 +164,6 @@ pnpm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 lerna-debug.log*
+
+# local_eval runtime logs
+examples/local_eval/logs/

@@ -106,6 +106,11 @@ def _json_loads_with_repair(
             A dictionary parsed from the JSON string after repair attempts.
             Returns an empty dict if all repair attempts fail.
     """
+    # Providers sometimes emit empty argument strings for zero-parameter
+    # tools (e.g. TeamDelete). Treat blank as ``{}`` before JSON parse.
+    if not json_str or not str(json_str).strip():
+        return {}
+
     try:
         # Loads directly
         res = json.loads(json_str)
