@@ -20,6 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from agentscope import setup_logger
 from agentscope.app import create_app, SubAgentTemplate
+from agentscope.app.hub import GitHubMCPHub
 from agentscope.app.message_bus import RedisMessageBus
 from agentscope.app.storage import AsyncSQLAlchemyStorage
 from agentscope.app.workspace_manager import LocalWorkspaceManager
@@ -81,7 +82,9 @@ app = create_app(
         # Keep MCP empty for first smoke test; add later via API / code.
         default_mcps=[],
     ),
-    # Offline Skill Hub for Hub → library → workspace curl eval.
+    # External MCP market (GitHub Registry) + offline Skill Hub.
+    # Flow: Hub → user library (PG) → POST /workspace/*/from-library.
+    mcp_hubs=[GitHubMCPHub()],
     skill_hubs=[LocalEvalSkillHub()],
     # Optional typed workers for Team / AgentCreate (see README §10).
     # ``default`` template is always available even without this list.
@@ -131,6 +134,8 @@ if __name__ == "__main__":
         f"Starting AgentScope local_eval on http://{_host}:{_port}\n"
         f"  storage = PostgreSQL\n"
         f"  message_bus = Redis ({_redis_host}:{_redis_port})\n"
+        f"  mcp_hubs = github (GitHub MCP Registry)\n"
+        f"  skill_hubs = local-eval\n"
         f"  chat models = register via POST /credential + session config\n",
     )
     # reload=False: single process so RedisMessageBus + In-process runs stay simple
