@@ -1,0 +1,22 @@
+name: chatling-turbo-0729
+label: ChatLing Turbo (0729)
+status: active
+
+input_types:
+  - text/plain
+
+output_types:
+  - text/plain
+
+context_size: 128000
+output_size: 8192
+
+parameter_overrides:
+  max_tokens:
+    maximum: 8192
+  thinking_enable:
+    hidden: true
+  reasoning_effort:
+    hidden: true
+  voice:
+    hidden: true

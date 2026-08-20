@@ -289,10 +289,13 @@ class AgentInvite(_TeamToolBase):
                     "members; this session is a worker.",
                 )
 
-            # Re-fetch fresh — the snapshot could be stale if the user
-            # just toggled the invite off.
+            # Re-fetch from the agent's actual owner. Shared agents
+            # (visible via ResourceAccessPolicy) live under a different
+            # user_id than the caller; looking them up under
+            # ``self._user_id`` would always miss and report
+            # "no longer invitable".
             fresh = await self._storage.get_agent(
-                self._user_id,
+                invited.user_id,
                 invited.id,
             )
             if (
@@ -339,6 +342,13 @@ class AgentInvite(_TeamToolBase):
                 self._user_id,
                 leader_session.agent_id,
             )
+            if leader_agent is None:
+                # Shared leader: the record lives under the admin
+                # account, not the chatting user.
+                leader_agent = await self._storage.get_agent(
+                    invited.user_id,
+                    leader_session.agent_id,
+                )
             leader_name = (
                 leader_agent.data.name
                 if leader_agent is not None
