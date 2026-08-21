@@ -34,6 +34,7 @@ from agentscope.agent import ReActConfig
 from agentscope.mcp import HttpMCPConfig, MCPClient
 from agentscope.permission import PermissionContext, PermissionMode
 
+from intel_handoff import IntelHandoffMiddleware
 from local_skill_hub import LocalEvalSkillHub
 
 _here = Path(__file__).resolve().parent
@@ -196,6 +197,16 @@ def _mount_web_ui(application) -> Path | None:
     return dist
 
 
+async def _intel_agent_middlewares(
+    user_id: str,
+    agent_id: str,
+    session_id: str,
+) -> list[IntelHandoffMiddleware]:
+    """Per-turn middleware: search tools only on 信息检索; cap TeamSay size."""
+    del user_id, agent_id, session_id
+    return [IntelHandoffMiddleware()]
+
+
 app = create_app(
     storage=storage,
     message_bus=message_bus,
@@ -209,6 +220,7 @@ app = create_app(
     # Flow: Hub → user library (PG) → POST /workspace/*/from-library.
     mcp_hubs=[GitHubMCPHub()],
     skill_hubs=[LocalEvalSkillHub()],
+    extra_agent_middlewares=_intel_agent_middlewares,
     # Optional typed workers for Team / AgentCreate (see README §10).
     # ``default`` template is always available even without this list.
     custom_subagent_templates=[

@@ -6,6 +6,7 @@ class names, walking the ``__cause__`` / ``__context__`` chain (AgentScope
 often wraps a provider error one layer deep). No provider SDK is imported;
 matching is by class name so httpx / openai / anthropic / aiohttp are all
 covered whether or not they are installed."""
+import re
 from typing import Iterator
 
 from ...exception import DeveloperOrientedException
@@ -32,6 +33,14 @@ _NETWORK_EXC_NAMES: frozenset[str] = frozenset(
         "ClientConnectionError",  # aiohttp
         "ClientConnectorError",  # aiohttp
     },
+)
+
+# ChatLing (and some other OpenAI-compatible gateways) stream the failure
+# as SSE ``error.message`` rather than an HTTP status on the exception.
+# The body looks like ``请求异常。http code:400，msg:Bad Request``.
+_HTTP_CODE_IN_MESSAGE = re.compile(
+    r"http\s*code\s*[:=]\s*(\d{3})",
+    re.IGNORECASE,
 )
 
 _GENERIC_MESSAGE: dict[ErrorType, str] = {
@@ -87,7 +96,8 @@ def _extract_status(e: BaseException) -> int | None:
 
     Different clients expose it differently: openai/anthropic promote
     ``status_code`` onto the exception, aiohttp uses ``status``, and raw
-    httpx keeps it on ``response.status_code``.
+    httpx keeps it on ``response.status_code``. Streaming gateways that
+    wrap the code in the error text (``http code:400``) are parsed last.
     """
     for exc in _causes(e):
         for src in (
@@ -97,6 +107,9 @@ def _extract_status(e: BaseException) -> int | None:
         ):
             if isinstance(src, int):
                 return src
+        match = _HTTP_CODE_IN_MESSAGE.search(str(exc))
+        if match:
+            return int(match.group(1))
     return None
 
 

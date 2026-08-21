@@ -135,6 +135,27 @@ class ClassifyErrorTest(unittest.TestCase):
         )
         self.assertEqual(_classify_type(ValueError("x")), ErrorType.UNKNOWN)
 
+    def test_http_code_in_streaming_message(self) -> None:
+        """Gateways that only put the status in the SSE error text.
+
+        openai.APIError from a ChatLing stream has no ``status_code``
+        attribute; the body is ``请求异常。http code:400，msg:Bad Request``.
+        Without parsing the message, the UI shows UNKNOWN.
+        """
+        exc = RuntimeError(
+            "请求异常。http code:400，msg:Bad Request，"
+            "requestId:dff3e243818741fda61e15349fa7fc48",
+        )
+        self.assertEqual(_classify_type(exc), ErrorType.INVALID_REQUEST)
+        self.assertEqual(
+            _classify_type(RuntimeError("http code:401，msg:Unauthorized")),
+            ErrorType.AUTHENTICATION,
+        )
+        self.assertEqual(
+            _classify_type(RuntimeError("http code:500，msg:oops")),
+            ErrorType.UPSTREAM,
+        )
+
     def test_classify_error_returns_generic_message(self) -> None:
         """The ErrorInfo carries the generic per-type message, never the
         raw exception text."""
