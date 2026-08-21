@@ -51,7 +51,7 @@ from ..storage import (
 )
 from ...message import ToolCallState
 from ...state import ToolContext
-from ..storage._utils import _ensure_team_members
+from ..storage._utils import _ensure_team_members, _load_agent_record
 from ...event import CustomEvent
 from ..workspace_manager import WorkspaceManagerBase
 
@@ -80,10 +80,13 @@ async def _build_team_detail(
     """
     leader_agent: AgentView | None = None
     leader_session = await storage.get_session(user_id, "", team.session_id)
+    roster = await _ensure_team_members(storage, user_id, team)
     if leader_session is not None:
-        leader_record = await storage.get_agent(
+        leader_record = await _load_agent_record(
+            storage,
             user_id,
             leader_session.agent_id,
+            roster,
         )
         if leader_record is not None:
             leader_agent = AgentView.model_validate(
@@ -94,8 +97,13 @@ async def _build_team_detail(
             )
 
     members: list[TeamMemberView] = []
-    for member in await _ensure_team_members(storage, user_id, team):
-        agent = await storage.get_agent(member.owner_id, member.agent_id)
+    for member in roster:
+        agent = await _load_agent_record(
+            storage,
+            user_id,
+            member.agent_id,
+            roster,
+        )
         if agent is None:
             continue
         # Use the member's team-scoped session id directly; an invited

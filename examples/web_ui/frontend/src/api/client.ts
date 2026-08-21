@@ -1,6 +1,8 @@
 import { toast } from 'sonner';
 
-export const getBaseUrl = () => localStorage.getItem('server_url') ?? '';
+export const getBaseUrl = () =>
+	localStorage.getItem('server_url') ||
+	(typeof window !== 'undefined' ? window.location.origin : '');
 export const getUserId = () => localStorage.getItem('username') ?? '';
 
 /**

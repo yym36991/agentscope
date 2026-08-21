@@ -159,6 +159,43 @@ message_bus = RedisMessageBus(
     port=_redis_port,
 )
 
+def _mount_web_ui(application) -> Path | None:
+    """Serve the built Web UI from the same process as the API.
+
+    Vite output lives at ``examples/web_ui/frontend/dist``. API routes
+    registered by ``create_app`` stay first; leftover GET paths fall
+    through to ``index.html`` so the SPA can handle client routing.
+    """
+    dist = (_here.parent / "web_ui" / "frontend" / "dist").resolve()
+    index = dist / "index.html"
+    if not index.is_file():
+        return None
+
+    from fastapi.responses import FileResponse
+    from fastapi.staticfiles import StaticFiles
+
+    assets = dist / "assets"
+    if assets.is_dir():
+        application.mount(
+            "/assets",
+            StaticFiles(directory=str(assets)),
+            name="ui-assets",
+        )
+
+    @application.get("/{full_path:path}", include_in_schema=False)
+    async def _spa(full_path: str):
+        candidate = (dist / full_path).resolve()
+        try:
+            candidate.relative_to(dist)
+        except ValueError:
+            return FileResponse(index)
+        if candidate.is_file():
+            return FileResponse(candidate)
+        return FileResponse(index)
+
+    return dist
+
+
 app = create_app(
     storage=storage,
     message_bus=message_bus,
@@ -214,6 +251,8 @@ acks / chit-chat).
     ],
 )
 
+_web_ui_dist = _mount_web_ui(app)
+
 
 if __name__ == "__main__":
     print(
@@ -226,6 +265,8 @@ if __name__ == "__main__":
         f"  skill_hubs = local-eval\n"
         f"  shared catalog = "
         f"{f'agents + credentials of {_admin_user}' if _admin_user else 'off (per-user agents)'}\n"
+        f"  web UI = "
+        f"{_web_ui_dist if _web_ui_dist else 'not built (cd examples/web_ui/frontend && pnpm build)'}\n"
         f"  chat models = register via POST /credential + session config\n",
     )
     # reload=False: single process so RedisMessageBus + In-process runs stay simple

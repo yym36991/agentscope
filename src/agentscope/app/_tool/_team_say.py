@@ -8,7 +8,7 @@ from pydantic import Field
 from ._constants import HANDLE_LEN
 from ._team_tool_base import _TeamToolBase
 from .._bus_ops import deliver_to_inbox
-from ..storage._utils import _ensure_team_members
+from ..storage._utils import _ensure_team_members, _load_agent_record
 from ...message import HintBlock, TextBlock, ToolResultState
 from ...tool import ToolChunk, ParamsBase
 
@@ -215,9 +215,16 @@ class TeamSay(_TeamToolBase):
             # is preserved by the AgentCreate name check (which rejects
             # ``@``) and by AgentInvite's one-borrow-per-agent-per-team
             # rule.
-            leader_agent = await self._storage.get_agent(
+            members = await _ensure_team_members(
+                self._storage,
+                self._user_id,
+                team,
+            )
+            leader_agent = await _load_agent_record(
+                self._storage,
                 self._user_id,
                 leader_session.agent_id,
+                members,
             )
             leader_name = (
                 leader_agent.data.name
@@ -227,15 +234,12 @@ class TeamSay(_TeamToolBase):
             directory: dict[str, tuple[str, str]] = {
                 leader_name: (leader_session.id, leader_session.agent_id),
             }
-            members = await _ensure_team_members(
-                self._storage,
-                self._user_id,
-                team,
-            )
             for member in members:
-                member_agent = await self._storage.get_agent(
-                    member.owner_id,
+                member_agent = await _load_agent_record(
+                    self._storage,
+                    self._user_id,
                     member.agent_id,
+                    members,
                 )
                 if member_agent is None:
                     continue
@@ -301,9 +305,11 @@ class TeamSay(_TeamToolBase):
                 recipients = [(target_session_id, target_agent_id)]
 
             # Resolve sender display name once.
-            sender_agent = await self._storage.get_agent(
+            sender_agent = await _load_agent_record(
+                self._storage,
                 self._user_id,
                 self._agent_id,
+                members,
             )
             sender_name = (
                 sender_agent.data.name

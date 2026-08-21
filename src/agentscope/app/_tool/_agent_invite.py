@@ -26,7 +26,7 @@ from ._constants import HANDLE_LEN
 from ._team_tool_base import _TeamToolBase
 from .._bus_ops import deliver_to_inbox
 from ..storage import SessionConfig, TeamMember
-from ..storage._utils import _ensure_team_members
+from ..storage._utils import _ensure_team_members, _load_agent_record
 from ...message import HintBlock, TextBlock, ToolResultState
 from ...state import AgentState
 from ...tool import ToolChunk, ParamsBase
@@ -338,13 +338,15 @@ class AgentInvite(_TeamToolBase):
                     f"for team {team.id} is missing — team is in an "
                     f"inconsistent state.",
                 )
-            leader_agent = await self._storage.get_agent(
+            leader_agent = await _load_agent_record(
+                self._storage,
                 self._user_id,
                 leader_session.agent_id,
+                existing_members,
             )
             if leader_agent is None:
-                # Shared leader: the record lives under the admin
-                # account, not the chatting user.
+                # Shared leader, no members yet: the record lives under
+                # the invited agent's owner (the catalog / admin user).
                 leader_agent = await self._storage.get_agent(
                     invited.user_id,
                     leader_session.agent_id,
@@ -363,7 +365,7 @@ class AgentInvite(_TeamToolBase):
             # lazily by the workspace manager on first chat, so a bare
             # id is enough.
             invited_sessions = await self._storage.list_sessions(
-                self._user_id,
+                invited.user_id,
                 invited.id,
             )
             if invited_sessions:
@@ -435,7 +437,7 @@ class AgentInvite(_TeamToolBase):
             team.data.members = [
                 *existing_members,
                 TeamMember(
-                    owner_id=self._user_id,
+                    owner_id=invited.user_id,
                     agent_id=invited.id,
                     session_id=borrowed.id,
                     role="invited",

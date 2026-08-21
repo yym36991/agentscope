@@ -12,7 +12,7 @@ from ._team_tool_base import _TeamToolBase
 from .._types import SubAgentTemplate
 from .._bus_ops import deliver_to_inbox
 from ..storage import AgentData, AgentRecord, SessionConfig, TeamMember
-from ..storage._utils import _ensure_team_members
+from ..storage._utils import _ensure_team_members, _load_agent_record
 from ...message import HintBlock, TextBlock, ToolResultState
 from ...permission import PermissionContext
 from ...state import AgentState
@@ -398,18 +398,20 @@ optional):
                     state=ToolResultState.ERROR,
                 )
 
-            leader_agent_record = await self._storage.get_agent(
-                self._user_id,
-                leader_session.agent_id,
-            )
-            existing_names: set[str] = set()
-            if leader_agent_record is not None:
-                existing_names.add(leader_agent_record.data.name)
             members = await _ensure_team_members(
                 self._storage,
                 self._user_id,
                 team,
             )
+            leader_agent_record = await _load_agent_record(
+                self._storage,
+                self._user_id,
+                leader_session.agent_id,
+                members,
+            )
+            existing_names: set[str] = set()
+            if leader_agent_record is not None:
+                existing_names.add(leader_agent_record.data.name)
             for member in members:
                 member_record = await self._storage.get_agent(
                     member.owner_id,

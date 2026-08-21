@@ -463,7 +463,7 @@ class SessionService:
                 await self.delete_agent(member.owner_id, member.agent_id)
             else:  # invited
                 await self.delete_session(
-                    member.owner_id,
+                    user_id,
                     member.agent_id,
                     member.session_id,
                 )

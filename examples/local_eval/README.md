@@ -69,6 +69,16 @@ cp .env.example .env
 
 ## 4. 启动服务
 
+前端和 API 同一个进程。先构建一次 Web UI（改过界面才需要再构建）：
+
+```bash
+cd /Users/a58/cdb/agentscope/examples/web_ui/frontend
+pnpm install
+pnpm build
+```
+
+然后只起后端：
+
 ```bash
 cd /Users/a58/cdb/agentscope
 source .venv/bin/activate
@@ -85,7 +95,12 @@ python main.py
 Starting AgentScope local_eval on http://0.0.0.0:8000
   storage = PostgreSQL
   message_bus = Redis (127.0.0.1:6380)
+  web UI = .../examples/web_ui/frontend/dist
 ```
+
+打开 **http://127.0.0.1:8000** 即可。首次进入会预填服务地址为当前页同源，填用户名后点连接。不必再起 Vite `:5173`。
+
+开发改前端仍可用 `pnpm dev --host 127.0.0.1 --port 5173`，设置里把服务地址填成 `http://127.0.0.1:8000`。
 
 健康检查：
 

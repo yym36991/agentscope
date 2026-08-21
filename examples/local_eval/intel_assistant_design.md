@@ -461,7 +461,7 @@ AgentScope 不只提供后端。它把**多用户 Agent 后端**做成了一套�
 | 项 | 选择 | 说明 |
 |---|---|---|
 | 服务 | `create_app` + uvicorn | 一个进程即一个服务实例 |
-| 前端 | 框架自带 Web UI | 构建成静态文件，浏览器直连服务 |
+| 前端 | 框架自带 Web UI | `pnpm build` 后由 uvicorn 同进程托管，打开服务端口即可 |
 | 状态存储 | PostgreSQL | 智能体 / 会话 / 消息 / 会话短期状态 |
 | 运行时协同 | Redis MessageBus | 会话锁、唤醒、流式消息扇出 |
 | 执行环境 | LocalWorkspaceManager | 每个智能体一个工作目录，放技能和工具配置 |

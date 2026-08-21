@@ -8,7 +8,7 @@ from ._model import TeamMember
 
 if TYPE_CHECKING:
     from ._base import StorageBase
-    from ._model import TeamRecord
+    from ._model import AgentRecord, TeamRecord
 
 
 def _dump_with_secrets(model: BaseModel) -> dict:
@@ -34,6 +34,53 @@ def _dump_with_secrets(model: BaseModel) -> dict:
             result[field_name] = value.get_secret_value()
 
     return result
+
+
+async def _load_agent_record(
+    storage: "StorageBase",
+    user_id: str,
+    agent_id: str,
+    members: list[TeamMember] | None = None,
+) -> "AgentRecord | None":
+    """Load an agent record that may be owned by another user.
+
+    Team-scoped sessions (including a borrowed ``AgentInvite`` session)
+    are keyed by the *chatting* user, while a shared catalog agent's
+    :class:`AgentRecord` stays under the original owner. Looking up
+    ``(chatting_user, agent_id)`` therefore misses for every viewer
+    except the owner.
+
+    Tries ``user_id`` first, then each ``TeamMember.owner_id`` so tools
+    and the session API can resolve the leader and invited experts
+    without a second access-policy round trip.
+
+    Args:
+        storage (`StorageBase`):
+            Owner-scoped storage.
+        user_id (`str`):
+            The chatting / team-owner user id.
+        agent_id (`str`):
+            The agent to load.
+        members (`list[TeamMember] | None`, optional):
+            Current team roster; each ``owner_id`` is tried as a
+            fallback owner.
+
+    Returns:
+        `AgentRecord | None`:
+            The record if found, otherwise ``None``.
+    """
+    record = await storage.get_agent(user_id, agent_id)
+    if record is not None:
+        return record
+    seen: set[str] = {user_id}
+    for member in members or []:
+        if member.owner_id in seen:
+            continue
+        seen.add(member.owner_id)
+        record = await storage.get_agent(member.owner_id, agent_id)
+        if record is not None:
+            return record
+    return None
 
 
 async def _ensure_team_members(
