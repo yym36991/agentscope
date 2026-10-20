@@ -1,14 +1,17 @@
 #!/bin/bash
 # ============================================================
-# AgentScope 本地服务 —— 一键启动脚本
+# 造价平台本地服务 —— 一键启动脚本
 #
 # 按依赖顺序启动(前一个就绪后才启动下一个):
-#   1. Redis          存储后端       端口 6379
-#   2. Agent Service  Python 后端    端口 8000
-#   3. Web UI         前端 5173 + Node 后端 3100
+#   1. PostgreSQL     平台/运行时落盘库  端口 5432
+#   2. Redis          总线/缓存         端口 6379
+#   3. Agent Service  AgentScope 运行时  端口 8000
+#   4. Web UI         前端 5173 + Node 后端 3100
+#   5. Platform API   L1 编排层后端      端口 8100
 #
 # 所有服务的输出都追加写入 logs/ 目录:
-#   logs/redis.log  logs/backend.log  logs/frontend.log
+#   logs/postgresql.log  logs/redis.log  logs/backend.log
+#   logs/frontend.log    logs/platform.log
 #
 # ▶ 执行命令 —— Git Bash 终端里(任意目录均可):
 #     bash /d/Users/code/agentscope/start.sh
@@ -22,6 +25,7 @@
 # ============================================================
 
 BASE_DIR="/d/Users/code/agentscope"
+PG_DIR="/d/Users/58369/postgresql"
 REDIS_DIR="/d/Users/code/tools/redis"
 LOG_DIR="$BASE_DIR/logs"
 PID_FILE="$LOG_DIR/service-pids.txt"
@@ -55,18 +59,58 @@ mkdir -p "$LOG_DIR"
 : > "$PID_FILE"
 
 echo "=========================================="
-echo " AgentScope 本地服务启动"
+echo " 造价平台本地服务启动"
 echo "=========================================="
 
-# ---------- 1. Redis ----------
+# ---------- 1. PostgreSQL ----------
+if port_up 5432; then
+    echo "[1/5] PostgreSQL 已在运行 (端口 5432), 跳过"
+else
+    if [ ! -f "$PG_DIR/bin/pg_ctl.exe" ]; then
+        echo "[错误] 未找到 $PG_DIR/bin/pg_ctl.exe"
+        exit 1
+    fi
+    # 首次运行: 初始化数据目录(本机监听 + trust 认证, 仅本地开发)
+    if [ ! -f "$PG_DIR/data/PG_VERSION" ]; then
+        echo "[1/5] 初始化 PostgreSQL 数据目录..."
+        "$PG_DIR/bin/initdb.exe" -D "$PG_DIR/data" -U postgres \
+            -A trust -E UTF8 --locale=C >> "$LOG_DIR/postgresql.log" 2>&1
+    fi
+    echo "[1/5] 启动 PostgreSQL (端口 5432)..."
+    {
+        echo ""
+        echo "===== $(date '+%Y-%m-%d %H:%M:%S') postgresql starting ====="
+    } >> "$LOG_DIR/postgresql.log"
+    # 注意: pg_ctl 的输出必须重定向到文件, 不能接管道 —— postgres.exe
+    # 会继承管道句柄, 导致管道永远等不到 EOF(脚本卡死)
+    "$PG_DIR/bin/pg_ctl.exe" -D "$PG_DIR/data" \
+        -l "$LOG_DIR/postgresql.log" -w start >> "$LOG_DIR/postgresql.log" 2>&1
+    if wait_port 5432 20; then
+        echo "      PostgreSQL 就绪"
+        # 确保两个业务库存在(已存在则跳过)
+        for db in platform agentscope; do
+            "$PG_DIR/bin/psql.exe" -U postgres -h localhost -tAc \
+                "SELECT 1 FROM pg_database WHERE datname='$db'" 2>/dev/null \
+                | grep -q 1 || \
+                "$PG_DIR/bin/createdb.exe" -U postgres -h localhost "$db" \
+                    >> "$LOG_DIR/postgresql.log" 2>&1
+        done
+    else
+        echo "      [错误] PostgreSQL 启动失败, 最近日志 (logs/postgresql.log):"
+        tail -n 5 "$LOG_DIR/postgresql.log" | sed 's/^/        /'
+        exit 1
+    fi
+fi
+
+# ---------- 2. Redis ----------
 if port_up 6379; then
-    echo "[1/3] Redis 已在运行 (端口 6379), 跳过"
+    echo "[2/5] Redis 已在运行 (端口 6379), 跳过"
 else
     if [ ! -f "$REDIS_DIR/redis-server.exe" ]; then
         echo "[错误] 未找到 $REDIS_DIR/redis-server.exe"
         exit 1
     fi
-    echo "[1/3] 启动 Redis (端口 6379)..."
+    echo "[2/5] 启动 Redis (端口 6379)..."
     {
         echo ""
         echo "===== $(date '+%Y-%m-%d %H:%M:%S') redis starting ====="
@@ -86,11 +130,11 @@ else
     fi
 fi
 
-# ---------- 2. Agent Service (Python 后端) ----------
+# ---------- 3. Agent Service (AgentScope 运行时) ----------
 if port_up 8000; then
-    echo "[2/3] Python 后端已在运行 (端口 8000), 跳过"
+    echo "[3/5] AgentScope 运行时已在运行 (端口 8000), 跳过"
 else
-    echo "[2/3] 启动 Agent Service (端口 8000)..."
+    echo "[3/5] 启动 Agent Service (端口 8000)..."
     {
         echo ""
         echo "===== $(date '+%Y-%m-%d %H:%M:%S') backend starting ====="
@@ -102,24 +146,24 @@ else
     cd "$BASE_DIR"
     echo "backend $(winpid_of "$BACKEND_PID")" >> "$PID_FILE"
     if wait_port 8000 40; then
-        echo "      后端就绪 (API 文档: http://localhost:8000/docs)"
+        echo "      运行时就绪 (API 文档: http://localhost:8000/docs)"
     else
-        echo "      [错误] 后端启动失败, 最近日志 (logs/backend.log):"
+        echo "      [错误] 运行时启动失败, 最近日志 (logs/backend.log):"
         tail -n 8 "$LOG_DIR/backend.log" | sed 's/^/        /'
         exit 1
     fi
 fi
 
-# ---------- 3. Web UI (前端 + Node 后端) ----------
+# ---------- 4. Web UI (前端 + Node 后端) ----------
 export PATH="/c/Program Files/nodejs:/c/Users/58369/AppData/Roaming/npm:$PATH"
 if ! command -v pnpm >/dev/null 2>&1; then
     echo "[错误] 未找到 pnpm, 请检查 Node.js 安装"
     exit 1
 fi
 if port_up 5173; then
-    echo "[3/3] Web UI 已在运行 (端口 5173), 跳过"
+    echo "[4/5] Web UI 已在运行 (端口 5173), 跳过"
 else
-    echo "[3/3] 启动 Web UI (前端 5173, Node 后端 3100)..."
+    echo "[4/5] 启动 Web UI (前端 5173, Node 后端 3100)..."
     {
         echo ""
         echo "===== $(date '+%Y-%m-%d %H:%M:%S') web_ui starting ====="
@@ -144,12 +188,44 @@ else
     fi
 fi
 
+# ---------- 5. Platform API (L1 编排层) ----------
+if port_up 8100; then
+    echo "[5/5] Platform API 已在运行 (端口 8100), 跳过"
+else
+    if [ ! -f "$BASE_DIR/platform/backend/.venv/Scripts/python.exe" ]; then
+        echo "[错误] 未找到 platform/backend/.venv, 请先参阅 platform/backend/README.md 初始化"
+        exit 1
+    fi
+    echo "[5/5] 启动 Platform API (端口 8100)..."
+    {
+        echo ""
+        echo "===== $(date '+%Y-%m-%d %H:%M:%S') platform starting ====="
+    } >> "$LOG_DIR/platform.log"
+    cd "$BASE_DIR/platform/backend"
+    # 幂等: 无待执行迁移时为空操作
+    .venv/Scripts/python.exe -m alembic upgrade head >> "$LOG_DIR/platform.log" 2>&1
+    nohup .venv/Scripts/python.exe -m uvicorn app.main:app \
+        --host 127.0.0.1 --port 8100 >> "$LOG_DIR/platform.log" 2>&1 &
+    PLATFORM_PID=$!
+    cd "$BASE_DIR"
+    echo "platform $(winpid_of "$PLATFORM_PID")" >> "$PID_FILE"
+    if wait_port 8100 30; then
+        echo "      Platform API 就绪 (API 文档: http://localhost:8100/docs)"
+    else
+        echo "      [错误] Platform API 启动失败, 最近日志 (logs/platform.log):"
+        tail -n 8 "$LOG_DIR/platform.log" | sed 's/^/        /'
+        exit 1
+    fi
+fi
+
 echo "------------------------------------------"
 echo " 全部服务已启动:"
-echo "   前端:    http://localhost:5173"
-echo "   后端:    http://localhost:8000  (API 文档 /docs)"
-echo "   Redis:   localhost:6379"
-echo "   日志:    $LOG_DIR/{redis,backend,frontend}.log"
+echo "   PostgreSQL:   localhost:5432 (库: platform / agentscope)"
+echo "   Redis:        localhost:6379"
+echo "   运行时:       http://localhost:8000  (API 文档 /docs)"
+echo "   Web UI:       http://localhost:5173"
+echo "   Platform API: http://localhost:8100  (API 文档 /docs)"
+echo "   日志:         $LOG_DIR/{postgresql,redis,backend,frontend,platform}.log"
 echo ""
 echo " 停止服务: bash /d/Users/code/agentscope/stop.sh"
 echo "------------------------------------------"
