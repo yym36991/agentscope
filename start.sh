@@ -3,15 +3,16 @@
 # 造价平台本地服务 —— 一键启动脚本
 #
 # 按依赖顺序启动(前一个就绪后才启动下一个):
-#   1. PostgreSQL     平台/运行时落盘库  端口 5432
-#   2. Redis          总线/缓存         端口 6379
-#   3. Agent Service  AgentScope 运行时  端口 8000
-#   4. Web UI         前端 5173 + Node 后端 3100
-#   5. Platform API   L1 编排层后端      端口 8100
+#   1. PostgreSQL       平台/运行时落盘库  端口 5432
+#   2. Redis            总线/缓存         端口 6379
+#   3. Agent Service    AgentScope 运行时  端口 8000
+#   4. Web UI           前端 5173 + Node 后端 3100
+#   5. Platform API     L1 编排层后端      端口 8100
+#   6. Platform 前端    平台 SPA 两视图   端口 5174
 #
 # 所有服务的输出都追加写入 logs/ 目录:
 #   logs/postgresql.log  logs/redis.log  logs/backend.log
-#   logs/frontend.log    logs/platform.log
+#   logs/frontend.log    logs/platform.log  logs/platform-frontend.log
 #
 # ▶ 执行命令 —— Git Bash 终端里(任意目录均可):
 #     bash /d/Users/code/agentscope/start.sh
@@ -64,7 +65,7 @@ echo "=========================================="
 
 # ---------- 1. PostgreSQL ----------
 if port_up 5432; then
-    echo "[1/5] PostgreSQL 已在运行 (端口 5432), 跳过"
+    echo "[1/6] PostgreSQL 已在运行 (端口 5432), 跳过"
 else
     if [ ! -f "$PG_DIR/bin/pg_ctl.exe" ]; then
         echo "[错误] 未找到 $PG_DIR/bin/pg_ctl.exe"
@@ -72,11 +73,11 @@ else
     fi
     # 首次运行: 初始化数据目录(本机监听 + trust 认证, 仅本地开发)
     if [ ! -f "$PG_DIR/data/PG_VERSION" ]; then
-        echo "[1/5] 初始化 PostgreSQL 数据目录..."
+        echo "[1/6] 初始化 PostgreSQL 数据目录..."
         "$PG_DIR/bin/initdb.exe" -D "$PG_DIR/data" -U postgres \
             -A trust -E UTF8 --locale=C >> "$LOG_DIR/postgresql.log" 2>&1
     fi
-    echo "[1/5] 启动 PostgreSQL (端口 5432)..."
+    echo "[1/6] 启动 PostgreSQL (端口 5432)..."
     {
         echo ""
         echo "===== $(date '+%Y-%m-%d %H:%M:%S') postgresql starting ====="
@@ -104,13 +105,13 @@ fi
 
 # ---------- 2. Redis ----------
 if port_up 6379; then
-    echo "[2/5] Redis 已在运行 (端口 6379), 跳过"
+    echo "[2/6] Redis 已在运行 (端口 6379), 跳过"
 else
     if [ ! -f "$REDIS_DIR/redis-server.exe" ]; then
         echo "[错误] 未找到 $REDIS_DIR/redis-server.exe"
         exit 1
     fi
-    echo "[2/5] 启动 Redis (端口 6379)..."
+    echo "[2/6] 启动 Redis (端口 6379)..."
     {
         echo ""
         echo "===== $(date '+%Y-%m-%d %H:%M:%S') redis starting ====="
@@ -132,9 +133,9 @@ fi
 
 # ---------- 3. Agent Service (AgentScope 运行时) ----------
 if port_up 8000; then
-    echo "[3/5] AgentScope 运行时已在运行 (端口 8000), 跳过"
+    echo "[3/6] AgentScope 运行时已在运行 (端口 8000), 跳过"
 else
-    echo "[3/5] 启动 Agent Service (端口 8000)..."
+    echo "[3/6] 启动 Agent Service (端口 8000)..."
     {
         echo ""
         echo "===== $(date '+%Y-%m-%d %H:%M:%S') backend starting ====="
@@ -161,9 +162,9 @@ if ! command -v pnpm >/dev/null 2>&1; then
     exit 1
 fi
 if port_up 5173; then
-    echo "[4/5] Web UI 已在运行 (端口 5173), 跳过"
+    echo "[4/6] Web UI 已在运行 (端口 5173), 跳过"
 else
-    echo "[4/5] 启动 Web UI (前端 5173, Node 后端 3100)..."
+    echo "[4/6] 启动 Web UI (前端 5173, Node 后端 3100)..."
     {
         echo ""
         echo "===== $(date '+%Y-%m-%d %H:%M:%S') web_ui starting ====="
@@ -190,13 +191,13 @@ fi
 
 # ---------- 5. Platform API (L1 编排层) ----------
 if port_up 8100; then
-    echo "[5/5] Platform API 已在运行 (端口 8100), 跳过"
+    echo "[5/6] Platform API 已在运行 (端口 8100), 跳过"
 else
     if [ ! -f "$BASE_DIR/platform/backend/.venv/Scripts/python.exe" ]; then
         echo "[错误] 未找到 platform/backend/.venv, 请先参阅 platform/backend/README.md 初始化"
         exit 1
     fi
-    echo "[5/5] 启动 Platform API (端口 8100)..."
+    echo "[5/6] 启动 Platform API (端口 8100)..."
     {
         echo ""
         echo "===== $(date '+%Y-%m-%d %H:%M:%S') platform starting ====="
@@ -218,14 +219,42 @@ else
     fi
 fi
 
+# ---------- 6. Platform 前端 (平台 SPA, 5174) ----------
+if port_up 5174; then
+    echo "[6/6] Platform 前端已在运行 (端口 5174), 跳过"
+else
+    if [ ! -d "$BASE_DIR/platform/frontend/node_modules" ]; then
+        echo "[6/6] 首次运行, 安装 Platform 前端依赖 (pnpm install)..."
+        (cd "$BASE_DIR/platform/frontend" && pnpm install >> "$LOG_DIR/platform-frontend.log" 2>&1)
+    fi
+    echo "[6/6] 启动 Platform 前端 (端口 5174)..."
+    {
+        echo ""
+        echo "===== $(date '+%Y-%m-%d %H:%M:%S') platform-frontend starting ====="
+    } >> "$LOG_DIR/platform-frontend.log"
+    cd "$BASE_DIR/platform/frontend"
+    nohup pnpm dev >> "$LOG_DIR/platform-frontend.log" 2>&1 &
+    PLATFE_PID=$!
+    cd "$BASE_DIR"
+    echo "platform-frontend $(winpid_of "$PLATFE_PID")" >> "$PID_FILE"
+    if wait_port 5174 40; then
+        echo "      Platform 前端就绪"
+    else
+        echo "      [错误] Platform 前端启动失败, 最近日志 (logs/platform-frontend.log):"
+        tail -n 8 "$LOG_DIR/platform-frontend.log" | sed 's/^/        /'
+        exit 1
+    fi
+fi
+
 echo "------------------------------------------"
 echo " 全部服务已启动:"
-echo "   PostgreSQL:   localhost:5432 (库: platform / agentscope)"
-echo "   Redis:        localhost:6379"
-echo "   运行时:       http://localhost:8000  (API 文档 /docs)"
-echo "   Web UI:       http://localhost:5173"
-echo "   Platform API: http://localhost:8100  (API 文档 /docs)"
-echo "   日志:         $LOG_DIR/{postgresql,redis,backend,frontend,platform}.log"
+echo "   PostgreSQL:       localhost:5432 (库: platform / agentscope)"
+echo "   Redis:            localhost:6379"
+echo "   运行时:           http://localhost:8000  (API 文档 /docs)"
+echo "   Web UI:           http://localhost:5173  (AgentScope 自带, 调试用)"
+echo "   Platform API:     http://localhost:8100  (API 文档 /docs)"
+echo "   Platform 前端:    http://localhost:5174  ★ 平台入口(两视图)"
+echo "   日志:             $LOG_DIR/{postgresql,redis,backend,frontend,platform,platform-frontend}.log"
 echo ""
 echo " 停止服务: bash /d/Users/code/agentscope/stop.sh"
 echo "------------------------------------------"

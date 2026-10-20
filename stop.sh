@@ -6,7 +6,7 @@
 #   1. 按 logs/service-pids.txt 里记录的根进程, 整棵进程树强制结束
 #      (只结束监听端口的进程会留下 pnpm/concurrently 等子进程
 #       变成孤儿进程锁住日志文件, 所以必须从进程树根部结束)
-#   2. 按端口兜底: 结束仍在监听 5173/3100/8000/8100/6379 的进程树
+#   2. 按端口兜底: 结束仍在监听 5173/5174/3100/8000/8100/6379 的进程树
 #   3. 清扫命令行里带 web_ui 的残留 node 进程
 #   PostgreSQL 不走强杀, 单独用 pg_ctl 优雅停止(避免数据损坏)
 #
@@ -48,7 +48,7 @@ else
 fi
 
 # ---------- 2. 按端口兜底(不含 5432, PG 由 pg_ctl 优雅停止) ----------
-for port in 5173 3100 8000 8100 6379; do
+for port in 5173 5174 3100 8000 8100 6379; do
     if port_up "$port"; then
         pids=$(netstat -ano | tr -d '\r' | grep "LISTENING" | grep ":$port " | awk '{print $NF}' | sort -u)
         for pid in $pids; do
@@ -74,7 +74,7 @@ fi
 # ---------- 结果确认 ----------
 sleep 1
 remaining=""
-for port in 6379 8000 8100 3100 5173 5432; do
+for port in 6379 8000 8100 3100 5174 5173 5432; do
     port_up "$port" && remaining="$remaining $port"
 done
 echo "------------------------------------------"
@@ -82,6 +82,6 @@ if [ -n "$remaining" ]; then
     echo " [警告] 以下端口仍被占用:$remaining"
     echo "        可能被其他程序占用, 请手动检查 (如 3000 端口是 GitFox, 不属于本服务)"
 else
-    echo " 全部服务已停止, 端口 5432/6379/8000/3100/5173/8100 均已释放"
+    echo " 全部服务已停止, 端口 5432/6379/8000/3100/5173/5174/8100 均已释放"
 fi
 echo "------------------------------------------"

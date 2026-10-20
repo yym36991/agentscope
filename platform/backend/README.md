@@ -89,8 +89,11 @@ POST /projects/{id}/stages/{stage}/start   开阶段运行（顺序+去重守卫
 GET  /projects/{id}/stage-runs 运行历史
 POST /stage-runs/{id}/chat     对话（转发到运行时会话，模型配置自愈）
 GET  /stage-runs/{id}/messages 会话消息（前端轮询用）
+POST /stage-runs/{id}/confirm  工具确认（HITL：允许/拒绝 asking 调用）
 POST /stage-runs/{id}/submit   提交产物（落盘 artifacts/，进入待审）
 POST /stage-runs/{id}/submit-latest   把智能体最新回答提交为产物
+GET  /stage-runs/{id}/artifacts       产物版本列表
+GET  /stage-runs/{id}/artifacts/{aid} 产物内容（预览）
 GET  /approvals/pending        我的待审批
 POST /approvals/{id}/decide    审批（approve | return+意见）
 ```

@@ -4,6 +4,8 @@
 Thin transport layer: validation here, state-machine rules in
 app/services/flow.py (single implementation, §5).
 """
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import or_, select
@@ -11,10 +13,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import get_current_user
+from app.config import get_settings
 from app.db import get_db
 from app.models import (
     ApprovalStatus,
     ApprovalTask,
+    ArtifactVersion,
     Project,
     ProjectMember,
     ProjectRole,
@@ -296,6 +300,58 @@ async def submit_run(
 
 
 # ---------- agent conversation (relayed through sys:runtime) ----------
+
+@router.get("/stage-runs/{run_id}/artifacts", response_model=list[ArtifactOut])
+async def list_run_artifacts(
+    run_id: int,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[ArtifactOut]:
+    run, _project = await _get_run_or_404(db, run_id, user)
+    artifacts = (
+        await db.scalars(
+            select(ArtifactVersion)
+            .where(ArtifactVersion.stage_run_id == run.id)
+            .order_by(ArtifactVersion.version_no)
+        )
+    ).all()
+    return [
+        ArtifactOut(
+            id=a.id,
+            version_no=a.version_no,
+            title=a.title,
+            format=a.format.value,
+            storage_path=a.storage_path,
+        )
+        for a in artifacts
+    ]
+
+
+@router.get("/stage-runs/{run_id}/artifacts/{artifact_id}")
+async def get_run_artifact(
+    run_id: int,
+    artifact_id: int,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Artifact content for preview (path is server-generated, never
+    client-supplied, so no traversal surface)."""
+    run, _project = await _get_run_or_404(db, run_id, user)
+    artifact = await db.get(ArtifactVersion, artifact_id)
+    if artifact is None or artifact.stage_run_id != run.id:
+        raise HTTPException(status_code=404, detail="artifact not found")
+    content = (
+        Path(get_settings().artifact_dir) / artifact.storage_path
+    ).read_text(encoding="utf-8")
+    return {
+        "id": artifact.id,
+        "version_no": artifact.version_no,
+        "title": artifact.title,
+        "format": artifact.format.value,
+        "content": content,
+    }
+
+
 
 @router.post("/stage-runs/{run_id}/chat")
 async def chat_with_stage_run(
