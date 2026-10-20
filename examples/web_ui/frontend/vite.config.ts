@@ -9,7 +9,10 @@ export default defineConfig({
 	plugins: [react(), tailwindcss(), svgr()],
 	server: {
 		proxy: {
-			'/api': 'http://localhost:3000',
+			// Port 3100: the web_ui express backend defaults to 3000, but
+			// that port is taken by other local apps (e.g. GitFox) on this
+			// machine, so start.sh starts it with PORT=3100.
+			'/api': 'http://localhost:3100',
 		},
 	},
 	resolve: {

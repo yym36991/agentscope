@@ -149,10 +149,22 @@ class AnthropicChatModel(ChatModelBase):
 
         import anthropic
 
+        # Anthropic-compatible gateways (e.g. Zhipu GLM) authenticate via
+        # ``Authorization: Bearer`` instead of ``x-api-key``. When a custom
+        # base URL points at such a gateway, send the key as the auth token
+        # too — the extra header is ignored by endpoints that don't need it,
+        # while official Anthropic keeps working through ``x-api-key``.
+        client_kwargs = dict(self.client_kwargs)
+        if self.credential.base_url and "auth_token" not in client_kwargs:
+            client_kwargs.setdefault(
+                "auth_token",
+                self.credential.api_key.get_secret_value(),
+            )
+
         self.client: anthropic.AsyncAnthropic = anthropic.AsyncAnthropic(
             api_key=self.credential.api_key.get_secret_value(),
             base_url=self.credential.base_url,
-            **self.client_kwargs,
+            **client_kwargs,
         )
 
     @classmethod
