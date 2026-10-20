@@ -42,6 +42,11 @@ class User(Base):
     is_active: Mapped[bool] = mapped_column(
         Boolean, default=True, nullable=False
     )
+    # NULL = dev bootstrap / SSO-managed account: login by username only
+    # until a password is set (SSO lands later, §13).
+    password_hash: Mapped[str | None] = mapped_column(
+        String(256), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False
     )

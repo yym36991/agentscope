@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.api import auth, routes
+from app.api import auth, projects, routes
 
 
 @asynccontextmanager
@@ -29,6 +29,7 @@ def create_app() -> FastAPI:
     )
     app.include_router(routes.router)
     app.include_router(auth.router)
+    app.include_router(projects.router)
     return app
 
 

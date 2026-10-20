@@ -48,6 +48,24 @@ API 文档：http://localhost:8100/docs
 - [x] 项目骨架、配置、DB 层
 - [x] 组织模型：users / groups / group_members（自助注册入 default 组）
 - [x] 项目模型：projects / project_members（状态机枚举就位）
-- [ ] JWT 登录 / 鉴权中间件
-- [ ] stage_runs / approval_tasks / artifact_versions（阶段状态机）
+- [x] JWT 登录 / 鉴权中间件（scrypt 口令哈希 + Bearer；无口令账号为开发引导态）
+- [x] 阶段状态机：stage_runs / approval_tasks / artifact_versions
+      （提交→待审→通过/退回；退回重开 round+1；审批通过自动推进项目阶段）
 - [ ] runtime_client（防腐层）+ 需求分析智能体端到端
+
+## API 一览（鉴权后 Bearer）
+
+```
+POST /auth/register      自助注册（入 default 组）
+POST /auth/login         登录 → JWT
+GET  /users/me           当前用户
+
+POST /projects                 建项目
+GET  /projects                 我的项目列表
+GET  /projects/{id}            项目详情
+POST /projects/{id}/stages/{stage}/start   开阶段运行（顺序+去重守卫）
+GET  /projects/{id}/stage-runs 运行历史
+POST /stage-runs/{id}/submit   提交产物（落盘 artifacts/，进入待审）
+GET  /approvals/pending        我的待审批
+POST /approvals/{id}/decide    审批（approve | return+意见）
+```

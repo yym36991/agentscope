@@ -9,6 +9,14 @@ from app.models.project import (
     ProjectStatus,
     StageKey,
 )
+from app.models.stage import (
+    ApprovalStatus,
+    ApprovalTask,
+    ArtifactFormat,
+    ArtifactVersion,
+    StageRun,
+    StageRunStatus,
+)
 
 __all__ = [
     "Base",
@@ -21,4 +29,10 @@ __all__ = [
     "ProjectRole",
     "ProjectStatus",
     "StageKey",
+    "ApprovalStatus",
+    "ApprovalTask",
+    "ArtifactFormat",
+    "ArtifactVersion",
+    "StageRun",
+    "StageRunStatus",
 ]

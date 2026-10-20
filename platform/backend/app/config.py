@@ -5,6 +5,7 @@ All values can be overridden via environment variables prefixed with
 ``PLATFORM_`` or a local ``.env`` file (see ``.env.example``).
 """
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -32,6 +33,11 @@ class Settings(BaseSettings):
     # the only code allowed to use this (§8.7 anti-corruption layer).
     runtime_base_url: str = "http://localhost:8000"
     runtime_principal: str = "sys:runtime"
+
+    # Where stage artifacts (PRD, prototypes...) are stored on disk.
+    artifact_dir: str = str(
+        Path(__file__).resolve().parents[1] / "artifacts"
+    )
 
 
 @lru_cache
