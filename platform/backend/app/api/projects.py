@@ -93,6 +93,16 @@ class ChatIn(BaseModel):
     content: str = Field(min_length=1, max_length=20_000)
 
 
+class ConfirmIn(BaseModel):
+    """HITL verdict for the run's asking tool calls.
+
+    ``tool_call_ids`` empty/None = every currently-asking call.
+    """
+
+    confirmed: bool = True
+    tool_call_ids: list[str] | None = None
+
+
 class SubmitLatestIn(BaseModel):
     title: str = Field(min_length=1, max_length=200)
 
@@ -322,6 +332,58 @@ async def chat_with_stage_run(
     except (FlowError, RuntimeCallError) as exc:
         raise _flow_http(exc) from exc
     return {"ok": True, "session_id": session_id}
+
+
+@router.post("/stage-runs/{run_id}/confirm")
+async def confirm_stage_tools(
+    run_id: int,
+    payload: ConfirmIn,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Answer the agent's human-in-the-loop tool permission prompt.
+
+    The runtime parks a reply whenever a tool call needs a human
+    verdict (session status ``awaiting_permission``); this resumes it.
+    """
+    run, project = await _get_run_or_404(db, run_id, user)
+    if run.session_id is None:
+        raise HTTPException(
+            status_code=409, detail="该运行还没有智能体会话，无待确认工具"
+        )
+    client = get_runtime_client()
+    try:
+        agent_id = await flow.resolve_stage_agent(run.stage)
+        data = await client.get_messages(agent_id, run.session_id)
+    except (FlowError, RuntimeCallError) as exc:
+        raise _flow_http(exc) from exc
+
+    last = data["messages"][-1] if data["messages"] else None
+    asking = [
+        b
+        for b in ((last or {}).get("content") or [])
+        if isinstance(b, dict)
+        and b.get("type") == "tool_call"
+        and b.get("state") == "asking"
+        and (
+            not payload.tool_call_ids or b.get("id") in payload.tool_call_ids
+        )
+    ]
+    if not asking:
+        raise HTTPException(
+            status_code=409, detail="没有等待确认的工具调用"
+        )
+    try:
+        await client.confirm_tool_calls(
+            agent_id, run.session_id, last["id"], asking, payload.confirmed
+        )
+    except (FlowError, RuntimeCallError) as exc:
+        raise _flow_http(exc) from exc
+    return {
+        "ok": True,
+        "confirmed": payload.confirmed,
+        "tool_calls": [b["name"] for b in asking],
+    }
 
 
 @router.get("/stage-runs/{run_id}/messages", response_model=MessagesOut)

@@ -183,6 +183,45 @@ class RuntimeClient:
             },
         )
 
+    async def confirm_tool_calls(
+        self,
+        agent_id: str,
+        session_id: str,
+        reply_id: str,
+        tool_calls: list[dict],
+        confirmed: bool,
+    ) -> None:
+        """Answer the runtime's human-in-the-loop permission prompt.
+
+        *tool_calls* are the asking tool-call blocks (echoed back by
+        id/name/input); the runtime resumes the parked reply with the
+        verdict.
+        """
+        await self._request(
+            "POST",
+            "/chat/",
+            json={
+                "agent_id": agent_id,
+                "session_id": session_id,
+                "input": {
+                    "type": "USER_CONFIRM_RESULT",
+                    "reply_id": reply_id,
+                    "confirm_results": [
+                        {
+                            "confirmed": confirmed,
+                            "tool_call": {
+                                "type": "tool_call",
+                                "id": b["id"],
+                                "name": b["name"],
+                                "input": b["input"],
+                            },
+                        }
+                        for b in tool_calls
+                    ],
+                },
+            },
+        )
+
     async def get_messages(
         self, agent_id: str, session_id: str
     ) -> dict:
