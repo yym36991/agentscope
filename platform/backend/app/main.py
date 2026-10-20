@@ -17,7 +17,9 @@ from app.api import auth, projects, routes
 async def lifespan(app: FastAPI):
     yield
     from app.db import engine
+    from app.runtime_client import get_runtime_client
 
+    await get_runtime_client().aclose()
     await engine.dispose()
 
 

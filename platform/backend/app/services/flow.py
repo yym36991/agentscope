@@ -26,6 +26,7 @@ from app.models import (
     StageRunStatus,
     User,
 )
+from app.runtime_client import RuntimeCallError, get_runtime_client
 
 STAGE_ORDER: list[StageKey] = [
     StageKey.REQUIREMENT,
@@ -35,6 +36,17 @@ STAGE_ORDER: list[StageKey] = [
     StageKey.TESTING,
     StageKey.ACCEPTANCE,
 ]
+
+# Runtime agent name per stage. The seed script (scripts/seed.py)
+# creates these under sys:runtime; M1 seeds only the first.
+STAGE_AGENT_NAMES: dict[StageKey, str] = {
+    StageKey.REQUIREMENT: "需求分析",
+    StageKey.PROTOTYPE: "原型设计",
+    StageKey.BUDGET: "工时预算罗盘",
+    StageKey.TESTCASES: "测试用例",
+    StageKey.TESTING: "测试",
+    StageKey.ACCEPTANCE: "验收审计",
+}
 
 ACTIVE_RUN_STATUSES = (StageRunStatus.IN_PROGRESS, StageRunStatus.UNDER_REVIEW)
 
@@ -86,10 +98,53 @@ async def resolve_approver(db: AsyncSession, project: Project) -> int:
     return approver.user_id if approver else project.owner_user_id
 
 
+async def resolve_stage_agent(stage: StageKey) -> str:
+    """Agent id for *stage*; FlowError if the seed script hasn't run."""
+    agent_id = await get_runtime_client().find_agent_by_name(
+        STAGE_AGENT_NAMES[stage]
+    )
+    if agent_id is None:
+        raise FlowError(
+            503,
+            f"stage agent '{STAGE_AGENT_NAMES[stage]}' is not seeded on "
+            f"the runtime — run scripts/seed.py",
+        )
+    return agent_id
+
+
+async def ensure_stage_session(
+    db: AsyncSession, run: StageRun, project: Project
+) -> tuple[str, str]:
+    """(session_id, agent_id), creating the runtime session if needed.
+
+    Lazy creation keeps runs opened while the runtime was down (or
+    before the model credential existed) usable later — the chat relay
+    calls this too, not just start_stage.
+    """
+    agent_id = await resolve_stage_agent(run.stage)
+    if run.session_id is not None:
+        return run.session_id, agent_id
+
+    client = get_runtime_client()
+    session_id = await client.create_session(
+        agent_id,
+        name=f"project{project.id}-{run.stage.value}-run{run.id}",
+        chat_model_config=await client.default_chat_model_config(),
+    )
+    run.session_id = session_id
+    await db.commit()
+    return session_id, agent_id
+
+
 async def start_stage(
     db: AsyncSession, project: Project, stage: StageKey, user: User
-) -> StageRun:
-    """Open a new run of *stage* (round + 1 per previous rework)."""
+) -> tuple[StageRun, str | None]:
+    """Open a new run of *stage* (round + 1 per previous rework).
+
+    Returns (run, warning): the runtime session is best-effort — if the
+    runtime is unreachable the run still opens and the chat relay
+    retries session creation, with *warning* telling the caller why.
+    """
     if project.status in (
         ProjectStatus.ACCEPTED,
         ProjectStatus.ARCHIVED,
@@ -158,7 +213,28 @@ async def start_stage(
     db.add(run)
     await db.commit()
     await db.refresh(run)
-    return run
+
+    warning: str | None = None
+    try:
+        session_id, agent_id = await ensure_stage_session(db, run, project)
+        client = get_runtime_client()
+        model = await client.default_chat_model_config()
+        if model is not None:
+            await client.send_message(
+                agent_id,
+                session_id,
+                f"【阶段启动】项目《{project.name}》的「"
+                f"{STAGE_AGENT_NAMES[stage]}」阶段已启动（第 {run.round} 轮）。"
+                f"请先向用户确认你需要了解的信息，再开始本阶段工作。",
+            )
+        else:
+            warning = (
+                "阶段已开启，但 sys:runtime 名下还没有模型凭证，"
+                "智能体暂时无法对话；配置凭证后可直接继续。"
+            )
+    except RuntimeCallError as exc:
+        warning = f"阶段已开启，但运行时暂不可用：{exc.detail}"
+    return run, warning
 
 
 async def submit_run(

@@ -29,10 +29,13 @@ class Settings(BaseSettings):
     jwt_secret: str = "dev-only-jwt-secret"
     jwt_expire_minutes: int = 12 * 60
 
-    # AgentScope runtime access. The (future) runtime_client module is
-    # the only code allowed to use this (§8.7 anti-corruption layer).
+    # AgentScope runtime access. app/runtime_client is the only code
+    # allowed to use these (§8.7 anti-corruption layer).
     runtime_base_url: str = "http://localhost:8000"
     runtime_principal: str = "sys:runtime"
+    # Chat model the platform binds onto every stage session (§8.6:
+    # the credential lives under sys:runtime, end users stay zero-config).
+    runtime_model: str = "glm-5.3"
 
     # Where stage artifacts (PRD, prototypes...) are stored on disk.
     artifact_dir: str = str(

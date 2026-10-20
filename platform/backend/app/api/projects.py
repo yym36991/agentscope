@@ -26,6 +26,7 @@ from app.models import (
 )
 from app.services import flow
 from app.services.flow import FlowError
+from app.runtime_client import RuntimeCallError, get_runtime_client
 
 router = APIRouter(tags=["projects"])
 
@@ -82,6 +83,27 @@ class StageRunOut(BaseModel):
         )
 
 
+class StartStageOut(StageRunOut):
+    """StageRunOut plus why the runtime session may not be ready yet."""
+
+    warning: str | None = None
+
+
+class ChatIn(BaseModel):
+    content: str = Field(min_length=1, max_length=20_000)
+
+
+class SubmitLatestIn(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+
+
+class MessagesOut(BaseModel):
+    messages: list[dict]
+    is_running: bool
+    has_more: bool = False
+    event_cursor: str | None = None
+
+
 class SubmitIn(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     content: str = Field(min_length=1, max_length=200_000)
@@ -112,8 +134,18 @@ class ApprovalOut(BaseModel):
 
 # ---------- helpers ----------
 
-def _flow_http(exc: FlowError) -> HTTPException:
+def _flow_http(exc: FlowError | RuntimeCallError) -> HTTPException:
     return HTTPException(status_code=exc.status, detail=exc.detail)
+
+
+async def _get_run_or_404(
+    db: AsyncSession, run_id: int, user: User
+) -> tuple[StageRun, Project]:
+    run = await db.get(StageRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="stage run not found")
+    project = await _get_project_or_404(db, run.project_id, user)
+    return run, project
 
 
 async def _get_project_or_404(
@@ -211,7 +243,7 @@ async def list_stage_runs(
 
 @router.post(
     "/projects/{project_id}/stages/{stage}/start",
-    response_model=StageRunOut,
+    response_model=StartStageOut,
     status_code=201,
 )
 async def start_stage(
@@ -219,13 +251,15 @@ async def start_stage(
     stage: StageKey,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> StageRunOut:
+) -> StartStageOut:
     project = await _get_project_or_404(db, project_id, user)
     try:
-        run = await flow.start_stage(db, project, stage, user)
-    except FlowError as exc:
+        run, warning = await flow.start_stage(db, project, stage, user)
+    except (FlowError, RuntimeCallError) as exc:
         raise _flow_http(exc) from exc
-    return StageRunOut.from_run(run)
+    out = StartStageOut.from_run(run)
+    out.warning = warning
+    return out
 
 
 @router.post("/stage-runs/{run_id}/submit", response_model=ArtifactOut)
@@ -235,10 +269,7 @@ async def submit_run(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ArtifactOut:
-    run = await db.get(StageRun, run_id)
-    if run is None:
-        raise HTTPException(status_code=404, detail="stage run not found")
-    project = await _get_project_or_404(db, run.project_id, user)
+    run, project = await _get_run_or_404(db, run_id, user)
     try:
         artifact = await flow.submit_run(
             db, run, project, payload.title, payload.content
@@ -252,6 +283,129 @@ async def submit_run(
         format=artifact.format.value,
         storage_path=artifact.storage_path,
     )
+
+
+# ---------- agent conversation (relayed through sys:runtime) ----------
+
+@router.post("/stage-runs/{run_id}/chat")
+async def chat_with_stage_run(
+    run_id: int,
+    payload: ChatIn,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Relay a user message into the run's runtime session.
+
+    Creates the session lazily (covers runs opened while the runtime
+    was down) and PATCHes the model config on every send, so a
+    credential registered after the session self-heals in.
+    """
+    run, project = await _get_run_or_404(db, run_id, user)
+    if run.status is not StageRunStatus.IN_PROGRESS:
+        raise HTTPException(
+            status_code=409,
+            detail=f"run #{run.id} is {run.status.value}, "
+            f"chat is only open while in_progress",
+        )
+    client = get_runtime_client()
+    try:
+        session_id, agent_id = await flow.ensure_stage_session(db, run, project)
+        model = await client.default_chat_model_config()
+        if model is None:
+            raise HTTPException(
+                status_code=503,
+                detail="平台尚未配置模型凭证（sys:runtime 名下没有 "
+                "credential），请联系管理员或用引导脚本配置后再对话",
+            )
+        await client.update_session_model(agent_id, session_id, model)
+        await client.send_message(agent_id, session_id, payload.content)
+    except (FlowError, RuntimeCallError) as exc:
+        raise _flow_http(exc) from exc
+    return {"ok": True, "session_id": session_id}
+
+
+@router.get("/stage-runs/{run_id}/messages", response_model=MessagesOut)
+async def stage_run_messages(
+    run_id: int,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> MessagesOut:
+    """Poll the run's conversation (frontend pull; SSE comes later)."""
+    run, project = await _get_run_or_404(db, run_id, user)
+    if run.session_id is None:
+        return MessagesOut(messages=[], is_running=False)
+    client = get_runtime_client()
+    try:
+        agent_id = await flow.resolve_stage_agent(run.stage)
+        data = await client.get_messages(agent_id, run.session_id)
+    except (FlowError, RuntimeCallError) as exc:
+        raise _flow_http(exc) from exc
+    return MessagesOut(**data)
+
+
+@router.post("/stage-runs/{run_id}/submit-latest", response_model=ArtifactOut)
+async def submit_latest(
+    run_id: int,
+    payload: SubmitLatestIn,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ArtifactOut:
+    """Submit the agent's latest answer as the stage artifact.
+
+    The M1 stand-in for artifact extraction: title from the user,
+    content = last non-empty assistant message of the session.
+    """
+    run, project = await _get_run_or_404(db, run_id, user)
+    if run.session_id is None:
+        raise HTTPException(
+            status_code=409,
+            detail="该运行还没有智能体会话（runtime 会话未创建），"
+            "无可提交的产出",
+        )
+    client = get_runtime_client()
+    try:
+        agent_id = await flow.resolve_stage_agent(run.stage)
+        data = await client.get_messages(agent_id, run.session_id)
+    except (FlowError, RuntimeCallError) as exc:
+        raise _flow_http(exc) from exc
+
+    content = _last_assistant_text(data["messages"])
+    if content is None:
+        raise HTTPException(
+            status_code=409,
+            detail="会话中还没有智能体产出，先完成对话再提交",
+        )
+    try:
+        artifact = await flow.submit_run(db, run, project, payload.title, content)
+    except FlowError as exc:
+        raise _flow_http(exc) from exc
+    return ArtifactOut(
+        id=artifact.id,
+        version_no=artifact.version_no,
+        title=artifact.title,
+        format=artifact.format.value,
+        storage_path=artifact.storage_path,
+    )
+
+
+def _last_assistant_text(messages: list[dict]) -> str | None:
+    """Text of the last assistant message, tolerating both content
+    shapes the runtime emits (plain string vs list of blocks)."""
+    for msg in reversed(messages):
+        if msg.get("role") != "assistant":
+            continue
+        raw = msg.get("content")
+        if isinstance(raw, str):
+            text = raw.strip()
+        else:
+            text = "\n".join(
+                block.get("text", "")
+                for block in raw or []
+                if isinstance(block, dict) and block.get("type") == "text"
+            ).strip()
+        if text:
+            return text
+    return None
 
 
 # ---------- approvals ----------
