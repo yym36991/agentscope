@@ -14,9 +14,9 @@ from agentscope.app.channel import (
     FeishuChannel,
 )
 from agentscope.app.hub import ClawSkillHub, GitHubMCPHub
-from agentscope.app.message_bus import RedisMessageBus
+from agentscope.app.message_bus import InMemoryMessageBus
 from agentscope.app.rag.knowledge_base_manager import CollectionPerKbManager
-from agentscope.app.storage import AsyncSQLAlchemyStorage
+from agentscope.app.storage import RedisStorage
 from agentscope.app.workspace_manager import LocalWorkspaceManager
 from agentscope.mcp import MCPClient, StdioMCPConfig, HttpMCPConfig
 from agentscope.middleware import AgenticMemoryMiddleware, MiddlewareBase
@@ -47,13 +47,9 @@ if os.getenv("AMAP_API_KEY"):
         ),
     )
 
-# Durable storage in PostgreSQL — the database itself ("agentscope") is
-# created by start.sh; tables are provisioned automatically on startup.
-storage = AsyncSQLAlchemyStorage(
-    url=os.getenv(
-        "AS_STORAGE_URL",
-        "postgresql+asyncpg://postgres@localhost:5432/agentscope",
-    ),
+storage = RedisStorage(
+    host="localhost",
+    port=6379,
 )
 
 vector_store = QdrantStore(location=":memory:")
@@ -78,15 +74,16 @@ async def longterm_memory_factory(
 
 app = create_app(
     storage=storage,
-    # Redis Streams message bus — state lives in Redis, so the runtime
-    # can be started as more than one process / instance.
-    message_bus=RedisMessageBus(
-        host=os.getenv("AS_REDIS_HOST", "localhost"),
-        port=int(os.getenv("AS_REDIS_PORT", "6379")),
-    ),
-    # Stable download-URL signing secret: survives restarts and would be
-    # shared by every instance behind a load balancer.
-    download_secret=os.getenv("AS_DOWNLOAD_SECRET", "dev-only-download-secret"),
+    message_bus=InMemoryMessageBus(),
+    # -- To use a Redis-backed message bus instead (recommended for
+    # -- multi-process / production deployments), uncomment the lines
+    # -- below and replace the InMemoryMessageBus() above:
+    #
+    # from agentscope.app.message_bus import RedisMessageBus
+    # message_bus=RedisMessageBus(
+    #     host="localhost",
+    #     port=6379,
+    # ),
     workspace_manager=LocalWorkspaceManager(
         basedir=os.path.join(
             os.path.dirname(os.path.abspath(__file__)),

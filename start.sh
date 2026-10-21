@@ -140,7 +140,7 @@ else
         echo ""
         echo "===== $(date '+%Y-%m-%d %H:%M:%S') backend starting ====="
     } >> "$LOG_DIR/backend.log"
-    cd "$BASE_DIR/examples/agent_service"
+    cd "$BASE_DIR/examples/platform_agent_service"
     nohup "$BASE_DIR/.venv/Scripts/python.exe" main.py \
         >> "$LOG_DIR/backend.log" 2>&1 &
     BACKEND_PID=$!

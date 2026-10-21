@@ -565,7 +565,7 @@ v0.3 决策：**目标形态直接定为多实例**（§13.1 #12）——按多�
 
 不把总线做上 PG 的三个理由：
 
-1. **`RedisMessageBus` 是框架现成的，并被官方注释明确指定为多进程/生产推荐**（examples/agent_service/main.py:77-86）；PG 版总线**仓库里不存在**，要自研——而它是并发关键组件（等价于把 Redis 版的 Lua 原子操作换成 `SELECT ... FOR UPDATE SKIP LOCKED` + advisory lock + `LISTEN/NOTIFY` 唤醒 + 轮询兜底），开发测试成本高，且出 bug 的地方恰恰最隐蔽（丢唤醒、重复投递、锁超时）
+1. **`RedisMessageBus` 是框架现成的，并被官方注释明确指定为多进程/生产推荐**（examples/agent_service/main.py:77-86，上游示例保持零改动；平台的实际组装入口在 `examples/platform_agent_service/main.py`）；PG 版总线**仓库里不存在**，要自研——而它是并发关键组件（等价于把 Redis 版的 Lua 原子操作换成 `SELECT ... FOR UPDATE SKIP LOCKED` + advisory lock + `LISTEN/NOTIFY` 唤醒 + 轮询兜底），开发测试成本高，且出 bug 的地方恰恰最隐蔽（丢唤醒、重复投递、锁超时）
 2. **事件流是高频小消息**（对话/工具/流式事件），走内存队列低延迟；落 PG 则每条事件一行——WAL 写放大 + 热队列表 vacuum 压力，用 OLTP 引擎做消息管道是逆着它的性子
 3. **Redis 的部署负担被高估了**：单二进制、无依赖、离线安装极简（本机开发已在用便携版）；银行内网普遍已有 Redis，不构成额外评审负担。组件数量上 PG+Redis=2 并不比 PG-only=1 多出实质运维——省掉的只是一个 5MB 的进程，换来的是自研一个并发关键件
 
