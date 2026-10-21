@@ -97,6 +97,12 @@ export interface ArtifactOut {
 	storage_path: string;
 }
 
+export interface WorkspaceFileOut {
+	path: string;
+	name: string;
+	size_bytes: number | null;
+}
+
 export interface ApprovalOut {
 	id: number;
 	stage_run_id: number;
@@ -171,6 +177,10 @@ export const api = {
 		request<ArtifactOut & { content: string }>(`/stage-runs/${runId}/artifacts/${artifactId}`),
 	submitLatest: (runId: number, title: string) =>
 		request<ArtifactOut>(`/stage-runs/${runId}/submit-latest`, 'POST', { title }),
+	listWorkspaceFiles: (runId: number) =>
+		request<WorkspaceFileOut[]>(`/stage-runs/${runId}/workspace-files`),
+	submitFile: (runId: number, title: string, path: string) =>
+		request<ArtifactOut>(`/stage-runs/${runId}/submit-file`, 'POST', { title, path }),
 	pendingApprovals: () => request<ApprovalOut[]>('/approvals/pending'),
 	decide: (taskId: number, action: 'approve' | 'return', comment?: string) =>
 		request<{ task_id: number; action: string; run_status: string; project_stage: string; project_status: string }>(

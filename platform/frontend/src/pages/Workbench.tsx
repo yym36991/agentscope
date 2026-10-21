@@ -104,6 +104,25 @@ export function WorkbenchPage() {
 		queryFn: () => api.getRunArtifact(rid, preview!),
 		enabled: preview !== null,
 	});
+	const workspaceFiles = useQuery({
+		queryKey: ['workspace-files', rid],
+		queryFn: () => api.listWorkspaceFiles(rid),
+		enabled: (run.data ?? []).some((r) => r.id === rid && r.session_id),
+		refetchInterval: 8000,
+	});
+	const [selectedFile, setSelectedFile] = useState('');
+	const submitFile = useMutation({
+		mutationFn: () => api.submitFile(rid, title.trim(), selectedFile),
+		onSuccess: (a) => {
+			toast.success(`产物已提交送审：${a.title}`);
+			setTitle('');
+			setSelectedFile('');
+			setPreview(a.id);
+			queryClient.invalidateQueries({ queryKey: ['artifacts', rid] });
+			queryClient.invalidateQueries({ queryKey: ['run', rid] });
+		},
+		onError: (err) => toast.error(err.message),
+	});
 	const submitLatest = useMutation({
 		mutationFn: () => api.submitLatest(rid, title.trim()),
 		onSuccess: (a) => {
@@ -291,14 +310,53 @@ export function WorkbenchPage() {
 								disabled={!inProgress}
 								onChange={(e) => setTitle(e.target.value)}
 							/>
+							<select
+								className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-input/30"
+								value={selectedFile}
+								disabled={!inProgress || workspaceFiles.isLoading}
+								onChange={(e) => {
+									const p = e.target.value;
+									setSelectedFile(p);
+									// 选中文件后标题为空则用文件名预填
+									if (p && !title.trim()) {
+										setTitle(p.split('/').pop()!.replace(/\.[^.]+$/, ''));
+									}
+								}}
+							>
+								<option value="">
+									{workspaceFiles.isLoading
+										? '加载工作区文件…'
+										: (workspaceFiles.data ?? []).length === 0
+											? '工作区暂无产物文件'
+											: '选择智能体写入的产物文件'}
+								</option>
+								{(workspaceFiles.data ?? []).map((f) => (
+									<option key={f.path} value={f.path}>
+										{f.path}
+										{f.size_bytes ? `（${(f.size_bytes / 1024).toFixed(1)}KB）` : ''}
+									</option>
+								))}
+							</select>
 							<Button
 								className="w-full"
 								size="sm"
+								disabled={
+									!inProgress || !title.trim() || !selectedFile || submitFile.isPending
+								}
+								onClick={() => submitFile.mutate()}
+							>
+								{submitFile.isPending && <Loader2 className="animate-spin" />}
+								提交选中产物
+							</Button>
+							<Button
+								className="w-full"
+								size="sm"
+								variant="outline"
 								disabled={!inProgress || !title.trim() || submitLatest.isPending}
 								onClick={() => submitLatest.mutate()}
 							>
 								{submitLatest.isPending && <Loader2 className="animate-spin" />}
-								提交智能体最新回答
+								提交智能体最新回答（兜底）
 							</Button>
 							<p className="text-xs text-muted-foreground">
 								提交后进入待审批，审批通过则推进到下一阶段；退回则重新开启（轮次 +1）。
@@ -340,13 +398,16 @@ export function WorkbenchPage() {
 									className="shrink-0"
 									onClick={() => {
 										const a = previewQuery.data!;
+										const isHtml = a.format === 'html';
 										const blob = new Blob([a.content], {
-											type: 'text/markdown;charset=utf-8',
+											type: isHtml
+												? 'text/html;charset=utf-8'
+												: 'text/markdown;charset=utf-8',
 										});
 										const url = URL.createObjectURL(blob);
 										const link = document.createElement('a');
 										link.href = url;
-										link.download = `${a.title}-v${a.version_no}.md`;
+										link.download = `${a.title}-v${a.version_no}.${a.format}`;
 										link.click();
 										URL.revokeObjectURL(url);
 									}}
@@ -355,7 +416,16 @@ export function WorkbenchPage() {
 								</Button>
 							</CardHeader>
 							<CardContent className="max-h-[60vh] overflow-auto text-sm">
-								<Markdown>{previewQuery.data.content}</Markdown>
+								{previewQuery.data.format === 'html' ? (
+									<iframe
+										title={previewQuery.data.title}
+										srcDoc={previewQuery.data.content}
+										className="h-[60vh] w-full rounded-md border bg-white"
+										sandbox="allow-scripts"
+									/>
+								) : (
+									<Markdown>{previewQuery.data.content}</Markdown>
+								)}
 							</CardContent>
 						</Card>
 					)}

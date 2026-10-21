@@ -52,9 +52,13 @@ class RuntimeClient:
     # ---------- transport ----------
 
     async def _request(
-        self, method: str, path: str, **kwargs: object
+        self, method: str, path: str, *, raw: bool = False, **kwargs: object
     ) -> object:
-        """One request as sys:runtime; maps transport failures to 503/502."""
+        """One request as sys:runtime; maps transport failures to 503/502.
+
+        ``raw=True`` returns the body as text instead of JSON — for the
+        workspace file endpoints, which stream raw bytes.
+        """
         try:
             resp = await self._client.request(method, path, **kwargs)
         except httpx.HTTPError as exc:
@@ -67,7 +71,7 @@ class RuntimeClient:
             )
         if resp.status_code == 204 or not resp.content:
             return None
-        return resp.json()
+        return resp.text if raw else resp.json()
 
     # ---------- agents ----------
 
@@ -252,6 +256,34 @@ class RuntimeClient:
             "has_more": data.get("has_more", False),  # type: ignore[union-attr]
             "event_cursor": data.get("event_cursor"),  # type: ignore[union-attr]
         }
+
+    # ---------- workspace ----------
+
+    async def list_workspace_dir(
+        self, agent_id: str, session_id: str, path: str = ""
+    ) -> list[dict]:
+        """One directory level of a session's workspace.
+
+        Empty *path* = workspace root. Each entry is
+        ``{name, is_dir, size_bytes}`` (runtime's DirectoryListing).
+        """
+        data = await self._request(
+            "GET",
+            "/workspace/directories",
+            params={"agent_id": agent_id, "session_id": session_id, "path": path},
+        )
+        return data["entries"]  # type: ignore[index]
+
+    async def read_workspace_file(
+        self, agent_id: str, session_id: str, path: str
+    ) -> str:
+        """One workspace file as text (runtime streams raw bytes)."""
+        return await self._request(  # type: ignore[return-value]
+            "GET",
+            "/workspace/files",
+            params={"agent_id": agent_id, "session_id": session_id, "path": path},
+            raw=True,
+        )
 
 
 @lru_cache

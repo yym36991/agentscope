@@ -18,6 +18,7 @@ from app.db import get_db
 from app.models import (
     ApprovalStatus,
     ApprovalTask,
+    ArtifactFormat,
     ArtifactVersion,
     Project,
     ProjectMember,
@@ -112,6 +113,25 @@ class ConfirmIn(BaseModel):
 
 class SubmitLatestIn(BaseModel):
     title: str = Field(min_length=1, max_length=200)
+
+
+class SubmitFileIn(BaseModel):
+    """Pick a file out of the agent's session workspace to submit.
+
+    ``path`` is workspace-root-relative; the endpoint rejects traversal
+    (``..``, absolute paths, backslashes) and non-whitelisted suffixes
+    — belt and braces on top of the runtime's own session-root
+    confinement.
+    """
+
+    title: str = Field(min_length=1, max_length=200)
+    path: str = Field(min_length=1, max_length=500)
+
+
+class WorkspaceFileOut(BaseModel):
+    path: str
+    name: str
+    size_bytes: int | None = None
 
 
 class MessagesOut(BaseModel):
@@ -539,6 +559,131 @@ def _last_assistant_text(messages: list[dict]) -> str | None:
         if text:
             return text
     return None
+
+
+# ---------- workspace-file submit (dropdown picker) ----------
+
+# What the picker offers; everything else in the workspace is scratch.
+WORKSPACE_FILE_EXTS = {".md", ".html", ".txt", ".csv"}
+_WORKSPACE_LIST_DEPTH = 2  # root + one subdirectory level
+_WORKSPACE_LIST_CAP = 100
+
+
+def _validate_workspace_path(path: str) -> None:
+    if (
+        ".." in path
+        or "\\" in path
+        or path.startswith("/")
+        or Path(path).suffix.lower() not in WORKSPACE_FILE_EXTS
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=f"仅支持工作区内 {sorted(WORKSPACE_FILE_EXTS)} 文件，"
+            f"路径需为相对路径且不含 ..",
+        )
+
+
+@router.get(
+    "/stage-runs/{run_id}/workspace-files", response_model=list[WorkspaceFileOut]
+)
+async def list_workspace_files(
+    run_id: int,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[WorkspaceFileOut]:
+    """Candidate deliverable files in the run's session workspace.
+
+    The runtime lists one directory level per call, so this walks root
+    plus one subdirectory level (agents group their output in task
+    folders) and filters by extension whitelist.
+    """
+    run, _project = await _get_run_or_404(db, run_id, user)
+    if run.session_id is None:
+        return []
+    client = get_runtime_client()
+    try:
+        agent_id = await flow.resolve_stage_agent(run.stage)
+        root = await client.list_workspace_dir(agent_id, run.session_id)
+    except (FlowError, RuntimeCallError) as exc:
+        raise _flow_http(exc) from exc
+
+    files: list[WorkspaceFileOut] = []
+
+    def _take(entry: dict, prefix: str = "") -> None:
+        name = entry.get("name", "")
+        if not entry.get("is_dir") and Path(name).suffix.lower() in WORKSPACE_FILE_EXTS:
+            files.append(
+                WorkspaceFileOut(
+                    path=f"{prefix}{name}",
+                    name=name,
+                    size_bytes=entry.get("size_bytes"),
+                )
+            )
+
+    for entry in root:
+        if len(files) >= _WORKSPACE_LIST_CAP:
+            break
+        if entry.get("is_dir"):
+            try:
+                sub = await client.list_workspace_dir(
+                    agent_id, run.session_id, entry.get("name", "")
+                )
+            except RuntimeCallError:
+                continue  # unreadable folder — not worth failing the list
+            for sub_entry in sub[: _WORKSPACE_LIST_CAP - len(files)]:
+                _take(sub_entry, prefix=f"{entry.get('name', '')}/")
+        else:
+            _take(entry)
+    return files
+
+
+@router.post("/stage-runs/{run_id}/submit-file", response_model=ArtifactOut)
+async def submit_workspace_file(
+    run_id: int,
+    payload: SubmitFileIn,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ArtifactOut:
+    """Submit one workspace file (picked from the dropdown) as the
+    stage artifact — the real deliverable the agent wrote, not the
+    chat's last message."""
+    run, project = await _get_run_or_404(db, run_id, user)
+    if run.session_id is None:
+        raise HTTPException(
+            status_code=409,
+            detail="该运行还没有智能体会话（runtime 会话未创建），"
+            "无可提交的产出",
+        )
+    _validate_workspace_path(payload.path)
+    client = get_runtime_client()
+    try:
+        agent_id = await flow.resolve_stage_agent(run.stage)
+        content = await client.read_workspace_file(
+            agent_id, run.session_id, payload.path
+        )
+    except (FlowError, RuntimeCallError) as exc:
+        raise _flow_http(exc) from exc
+    if not content or not content.strip():
+        raise HTTPException(
+            status_code=409, detail="选中的文件为空，无法作为产物提交"
+        )
+    suffix = Path(payload.path).suffix.lower()
+    fmt = (
+        ArtifactFormat.HTML if suffix == ".html" else ArtifactFormat.MD
+    )
+    try:
+        artifact = await flow.submit_run(
+            db, run, project, payload.title, content, fmt
+        )
+    except FlowError as exc:
+        raise _flow_http(exc) from exc
+    return ArtifactOut(
+        id=artifact.id,
+        version_no=artifact.version_no,
+        title=artifact.title,
+        format=artifact.format.value,
+        storage_path=artifact.storage_path,
+    )
 
 
 # ---------- approvals ----------
