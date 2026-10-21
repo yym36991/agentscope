@@ -138,7 +138,7 @@ export const STAGE_ORDER = [
 ] as const;
 
 export const STAGE_LABELS: Record<string, string> = {
-	requirement: '需求分析',
+	requirement: '需求生成',
 	prototype: '原型设计',
 	budget: '工时预算',
 	testcases: '测试用例',
@@ -187,6 +187,8 @@ export const api = {
 			'POST',
 			{ confirmed, tool_call_ids: toolCallIds, allow_all: allowAll },
 		),
+	interrupt: (runId: number) =>
+		request<{ ok: boolean; session_id: string }>(`/stage-runs/${runId}/interrupt`, 'POST'),
 
 	// ---------- artifacts & approvals ----------
 	listRunArtifacts: (runId: number) =>

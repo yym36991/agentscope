@@ -189,6 +189,34 @@ class RuntimeClient:
             json={"permission_mode": mode},
         )
 
+    async def get_session_status(self, agent_id: str, session_id: str) -> str:
+        """Unified session status.
+
+        One of ``running`` / ``idle`` / ``awaiting_permission`` /
+        ``awaiting_external_result`` — cluster liveness plus the
+        parking state derived from the persisted agent state (the
+        message list alone can go stale after a failed reply).
+        """
+        data = await self._request(
+            "GET",
+            f"/sessions/{session_id}/status",
+            params={"agent_id": agent_id},
+        )
+        return data["status"]  # type: ignore[index]
+
+    async def interrupt_session(self, agent_id: str, session_id: str) -> None:
+        """Abort a running or HITL-parked reply (idempotent on idle).
+
+        The escape hatch for a parked session whose confirmation can no
+        longer be answered — the parked tool calls close as interrupted
+        and the session returns to idle.
+        """
+        await self._request(
+            "POST",
+            f"/sessions/{session_id}/interrupt",
+            params={"agent_id": agent_id},
+        )
+
     # ---------- chat ----------
 
     async def send_message(

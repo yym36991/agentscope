@@ -392,10 +392,22 @@ async def _relay_chat(
     The model PATCH is skipped when a run holds the session (409): a
     running reply already carries the config it was started with, and
     the runtime refuses mid-run changes anyway.
+
+    A parked session (HITL asking / external result) only accepts its
+    answer event — a plain message there crashes the runtime run with
+    a generic setup error and an empty bubble, so it is blocked with a
+    clear 409 instead.
     """
     client = get_runtime_client()
     try:
         session_id, agent_id = await flow.ensure_stage_session(db, run, project)
+        status = await client.get_session_status(agent_id, session_id)
+        if status in ("awaiting_permission", "awaiting_external_result"):
+            raise HTTPException(
+                status_code=409,
+                detail="智能体正在等待工具调用的确认，请先在对话中"
+                "批准或拒绝（或中止本轮）后再发新消息",
+            )
         model = await client.default_chat_model_config()
         if model is None:
             raise HTTPException(
@@ -636,22 +648,44 @@ async def confirm_stage_tools(
     client = get_runtime_client()
     try:
         agent_id = await flow.resolve_stage_agent(run.stage)
+        # Pre-flight against the authoritative status: the persisted
+        # message projection can lag (a just-confirmed call still reads
+        # "asking"), and sending a stale confirm makes the runtime kill
+        # the whole reply with a generic error. Only a parked session
+        # accepts a confirm; anything else gets a clear 409.
+        status = await client.get_session_status(agent_id, run.session_id)
+        if status != "awaiting_permission":
+            detail = (
+                "智能体正在处理，请等它停靠后再确认"
+                if status == "running"
+                else "没有等待确认的工具调用"
+            )
+            raise HTTPException(status_code=409, detail=detail)
         data = await client.get_messages(agent_id, run.session_id)
     except (FlowError, RuntimeCallError) as exc:
         raise _flow_http(exc) from exc
 
-    last = data["messages"][-1] if data["messages"] else None
-    asking = [
-        b
-        for b in ((last or {}).get("content") or [])
-        if isinstance(b, dict)
-        and b.get("type") == "tool_call"
-        and b.get("state") == "asking"
-        and (
-            not payload.tool_call_ids or b.get("id") in payload.tool_call_ids
-        )
-    ]
-    if not asking:
+    # The parked asking blocks may sit several messages back: failed
+    # replies append empty error bubbles after them, and those carry
+    # no tool calls. Scan backwards for the newest message that still
+    # holds asking blocks instead of only looking at the last one.
+    asking: list[dict] = []
+    asking_msg: dict | None = None
+    for msg in reversed(data["messages"]):
+        asking = [
+            b
+            for b in (msg.get("content") or [])
+            if isinstance(b, dict)
+            and b.get("type") == "tool_call"
+            and b.get("state") == "asking"
+            and (
+                not payload.tool_call_ids or b.get("id") in payload.tool_call_ids
+            )
+        ]
+        if asking:
+            asking_msg = msg
+            break
+    if asking_msg is None:
         raise HTTPException(
             status_code=409, detail="没有等待确认的工具调用"
         )
@@ -668,7 +702,7 @@ async def confirm_stage_tools(
             pass
     try:
         await client.confirm_tool_calls(
-            agent_id, run.session_id, last["id"], asking, payload.confirmed
+            agent_id, run.session_id, asking_msg["id"], asking, payload.confirmed
         )
     except (FlowError, RuntimeCallError) as exc:
         raise _flow_http(exc) from exc
@@ -678,6 +712,33 @@ async def confirm_stage_tools(
         "tool_calls": [b["name"] for b in asking],
         "allow_all_applied": allow_all_applied,
     }
+
+
+@router.post("/stage-runs/{run_id}/interrupt")
+async def interrupt_stage_run(
+    run_id: int,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Abort the run's in-flight or HITL-parked reply.
+
+    The escape hatch for a parked session that can no longer be
+    answered (e.g. its confirmation was lost to a failed reply): the
+    parked tool calls close as interrupted and the session returns to
+    idle, ready for the next message.
+    """
+    run, project = await _get_run_or_404(db, run_id, user)
+    if run.session_id is None:
+        raise HTTPException(
+            status_code=409, detail="该运行还没有智能体会话，无可中止的回复"
+        )
+    client = get_runtime_client()
+    try:
+        agent_id = await flow.resolve_stage_agent(run.stage)
+        await client.interrupt_session(agent_id, run.session_id)
+    except (FlowError, RuntimeCallError) as exc:
+        raise _flow_http(exc) from exc
+    return {"ok": True, "session_id": run.session_id}
 
 
 @router.get("/stage-runs/{run_id}/messages", response_model=MessagesOut)

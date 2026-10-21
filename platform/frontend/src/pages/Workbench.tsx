@@ -7,6 +7,7 @@ import {
 	Eye,
 	FileText,
 	Loader2,
+	OctagonX,
 	Paperclip,
 	Send,
 	ShieldQuestion,
@@ -107,6 +108,14 @@ export function WorkbenchPage() {
 		onSuccess: () => queryClient.invalidateQueries({ queryKey: ['messages', rid] }),
 		onError: (err) => toast.error(err.message),
 	});
+	const interrupt = useMutation({
+		mutationFn: () => api.interrupt(rid),
+		onSuccess: () => {
+			toast.success('已中止本轮回复');
+			queryClient.invalidateQueries({ queryKey: ['messages', rid] });
+		},
+		onError: (err) => toast.error(err.message),
+	});
 
 	// ---------- artifacts ----------
 
@@ -173,9 +182,16 @@ export function WorkbenchPage() {
 	if (!currentRun) return <p className="p-6 text-sm text-muted-foreground">加载中…</p>;
 	const inProgress = currentRun.status === 'in_progress';
 
-	// 有附件时草稿可空；两者皆空才无东西可发
+	// 有附件时草稿可空；两者皆空才无东西可发。停泊在工具确认时也不可发——
+	// 运行时对停靠会话只接受确认事件，普通消息会使其以空错误气泡失败。
 	const sending = chat.isPending || uploadChat.isPending;
-	const canSend = !!(draft.trim() || attachment) && inProgress && !messages.data?.is_running && !sending;
+	const parked = asking.length > 0;
+	const canSend =
+		!!(draft.trim() || attachment) &&
+		inProgress &&
+		!messages.data?.is_running &&
+		!parked &&
+		!sending;
 	const doSend = () => {
 		if (attachment) uploadChat.mutate();
 		else if (draft.trim()) chat.mutate(draft.trim());
@@ -263,8 +279,17 @@ export function WorkbenchPage() {
 								智能体请求执行 {asking.length} 个工具调用，请确认
 								<Button
 									size="sm"
+									variant="ghost"
+									className="ml-auto text-amber-900 hover:text-amber-900 dark:text-amber-200 dark:hover:text-amber-200"
+									disabled={interrupt.isPending}
+									title="放弃本轮未完成的回复，让会话回到可继续对话的状态"
+									onClick={() => interrupt.mutate()}
+								>
+									<OctagonX /> 中止本轮
+								</Button>
+								<Button
+									size="sm"
 									variant="outline"
-									className="ml-auto"
 									disabled={confirm.isPending}
 									onClick={() => confirm.mutate({ ok: true, allowAll: true })}
 								>
@@ -329,14 +354,16 @@ export function WorkbenchPage() {
 								<textarea
 									className="max-h-40 min-h-10 w-full resize-none rounded-md border bg-transparent px-3 py-2 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
 									placeholder={
-										inProgress
-											? messages.data?.is_running
+										!inProgress
+											? '该阶段不在进行中，对话已冻结'
+											: messages.data?.is_running
 												? '智能体正在回复…'
-												: '输入消息，Enter 发送，Shift+Enter 换行；可附文件（需求文档/源代码/截图）'
-											: '该阶段不在进行中，对话已冻结'
+												: parked
+													? '智能体在等待工具确认，请先处理上方请求（或中止本轮）'
+													: '输入消息，Enter 发送，Shift+Enter 换行；可附文件（需求文档/源代码/截图）'
 									}
 									value={draft}
-									disabled={!inProgress || messages.data?.is_running}
+									disabled={!inProgress || messages.data?.is_running || parked}
 									onChange={(e) => setDraft(e.target.value)}
 									onKeyDown={(e) => {
 										if (e.key === 'Enter' && !e.shiftKey) {
@@ -363,7 +390,7 @@ export function WorkbenchPage() {
 								size="icon"
 								variant="ghost"
 								className="shrink-0 text-muted-foreground"
-								disabled={!inProgress || messages.data?.is_running}
+								disabled={!inProgress || messages.data?.is_running || parked}
 								title="上传文件（md/txt/csv/源代码/docx 内联，图片/PDF 作为附件）"
 								onClick={() => fileInputRef.current?.click()}
 							>
