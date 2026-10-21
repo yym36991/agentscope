@@ -197,6 +197,10 @@ export const api = {
 		request<ArtifactOut>(`/stage-runs/${runId}/submit-latest`, 'POST', { title }),
 	listWorkspaceFiles: (runId: number) =>
 		request<WorkspaceFileOut[]>(`/stage-runs/${runId}/workspace-files`),
+	getWorkspaceFile: (runId: number, path: string) =>
+		request<{ path: string; format: string; content: string }>(
+			`/stage-runs/${runId}/workspace-file?path=${encodeURIComponent(path)}`,
+		),
 	submitFile: (runId: number, title: string, path: string) =>
 		request<ArtifactOut>(`/stage-runs/${runId}/submit-file`, 'POST', { title, path }),
 	pendingApprovals: () => request<ApprovalOut[]>('/approvals/pending'),

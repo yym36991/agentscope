@@ -4,6 +4,7 @@ import {
 	ArrowLeft,
 	CheckCheck,
 	Download,
+	Eye,
 	FileText,
 	Loader2,
 	Paperclip,
@@ -123,12 +124,19 @@ export function WorkbenchPage() {
 		refetchInterval: 8000,
 	});
 	const [selectedFile, setSelectedFile] = useState('');
+	const [wsPreviewOpen, setWsPreviewOpen] = useState(false);
+	const wsFileQuery = useQuery({
+		queryKey: ['workspace-file', rid, selectedFile],
+		queryFn: () => api.getWorkspaceFile(rid, selectedFile!),
+		enabled: wsPreviewOpen && !!selectedFile,
+	});
 	const submitFile = useMutation({
 		mutationFn: () => api.submitFile(rid, title.trim(), selectedFile),
 		onSuccess: (a) => {
 			toast.success(`产物已提交送审：${a.title}`);
 			setTitle('');
 			setSelectedFile('');
+			setWsPreviewOpen(false);
 			setPreview(a.id);
 			queryClient.invalidateQueries({ queryKey: ['artifacts', rid] });
 			queryClient.invalidateQueries({ queryKey: ['run', rid] });
@@ -171,6 +179,19 @@ export function WorkbenchPage() {
 	const doSend = () => {
 		if (attachment) uploadChat.mutate();
 		else if (draft.trim()) chat.mutate(draft.trim());
+	};
+
+	// 产物/工作区文件共用的客户端下载
+	const downloadBlob = (name: string, content: string, format: string) => {
+		const blob = new Blob([content], {
+			type: format === 'html' ? 'text/html;charset=utf-8' : 'text/markdown;charset=utf-8',
+		});
+		const url = URL.createObjectURL(blob);
+		const link = document.createElement('a');
+		link.href = url;
+		link.download = name.endsWith(`.${format}`) ? name : `${name}.${format}`;
+		link.click();
+		URL.revokeObjectURL(url);
 	};
 
 	return (
@@ -402,6 +423,15 @@ export function WorkbenchPage() {
 							<Button
 								className="w-full"
 								size="sm"
+								variant="ghost"
+								disabled={!selectedFile}
+								onClick={() => setWsPreviewOpen(!wsPreviewOpen)}
+							>
+								<Eye /> {wsPreviewOpen ? '收起预览' : '预览选中文件'}
+							</Button>
+							<Button
+								className="w-full"
+								size="sm"
 								disabled={
 									!inProgress || !title.trim() || !selectedFile || submitFile.isPending
 								}
@@ -425,6 +455,45 @@ export function WorkbenchPage() {
 							</p>
 						</CardContent>
 					</Card>
+
+					{wsPreviewOpen && selectedFile && (
+						<Card className="min-h-0">
+							<CardHeader className="flex-row items-center justify-between space-y-0">
+								<CardTitle className="truncate text-sm">{selectedFile}</CardTitle>
+								{wsFileQuery.data && (
+									<Button
+										size="sm"
+										variant="outline"
+										className="shrink-0"
+										onClick={() =>
+											downloadBlob(
+												selectedFile.split('/').pop()!,
+												wsFileQuery.data!.content,
+												wsFileQuery.data!.format,
+											)
+										}
+									>
+										<Download /> 下载
+									</Button>
+								)}
+							</CardHeader>
+							<CardContent className="max-h-[50vh] overflow-auto text-sm">
+								{wsFileQuery.isLoading && (
+									<p className="text-xs text-muted-foreground">加载文件内容…</p>
+								)}
+								{wsFileQuery.data?.format === 'html' ? (
+									<iframe
+										title={selectedFile}
+										srcDoc={wsFileQuery.data.content}
+										className="h-[50vh] w-full rounded-md border bg-white"
+										sandbox="allow-scripts"
+									/>
+								) : (
+									wsFileQuery.data && <Markdown>{wsFileQuery.data.content}</Markdown>
+								)}
+							</CardContent>
+						</Card>
+					)}
 
 					<Card>
 						<CardHeader>
@@ -460,18 +529,7 @@ export function WorkbenchPage() {
 									className="shrink-0"
 									onClick={() => {
 										const a = previewQuery.data!;
-										const isHtml = a.format === 'html';
-										const blob = new Blob([a.content], {
-											type: isHtml
-												? 'text/html;charset=utf-8'
-												: 'text/markdown;charset=utf-8',
-										});
-										const url = URL.createObjectURL(blob);
-										const link = document.createElement('a');
-										link.href = url;
-										link.download = `${a.title}-v${a.version_no}.${a.format}`;
-										link.click();
-										URL.revokeObjectURL(url);
+										downloadBlob(`${a.title}-v${a.version_no}`, a.content, a.format);
 									}}
 								>
 									<Download /> 下载

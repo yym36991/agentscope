@@ -762,6 +762,33 @@ async def list_workspace_files(
     return files
 
 
+@router.get("/stage-runs/{run_id}/workspace-file")
+async def get_workspace_file(
+    run_id: int,
+    path: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Preview one workspace file BEFORE submitting it — the dropdown
+    only shows names, this lets the user check the content first."""
+    run, _project = await _get_run_or_404(db, run_id, user)
+    if run.session_id is None:
+        raise HTTPException(
+            status_code=409, detail="该运行还没有智能体会话，无可预览的文件"
+        )
+    _validate_workspace_path(path)
+    client = get_runtime_client()
+    try:
+        agent_id = await flow.resolve_stage_agent(run.stage)
+        content = await client.read_workspace_file(
+            agent_id, run.session_id, path
+        )
+    except (FlowError, RuntimeCallError) as exc:
+        raise _flow_http(exc) from exc
+    fmt = "html" if Path(path).suffix.lower() == ".html" else "md"
+    return {"path": path, "format": fmt, "content": content}
+
+
 @router.post("/stage-runs/{run_id}/submit-file", response_model=ArtifactOut)
 async def submit_workspace_file(
     run_id: int,
