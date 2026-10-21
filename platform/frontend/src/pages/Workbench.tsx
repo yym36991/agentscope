@@ -3,6 +3,7 @@ import type { ToolCallBlock } from '@agentscope-ai/agentscope/message';
 import {
 	ArrowLeft,
 	CheckCheck,
+	Download,
 	FileText,
 	Loader2,
 	Send,
@@ -331,8 +332,27 @@ export function WorkbenchPage() {
 
 					{preview !== null && previewQuery.data && (
 						<Card className="min-h-0">
-							<CardHeader>
+							<CardHeader className="flex-row items-center justify-between space-y-0">
 								<CardTitle className="truncate text-sm">{previewQuery.data.title}</CardTitle>
+								<Button
+									size="sm"
+									variant="outline"
+									className="shrink-0"
+									onClick={() => {
+										const a = previewQuery.data!;
+										const blob = new Blob([a.content], {
+											type: 'text/markdown;charset=utf-8',
+										});
+										const url = URL.createObjectURL(blob);
+										const link = document.createElement('a');
+										link.href = url;
+										link.download = `${a.title}-v${a.version_no}.md`;
+										link.click();
+										URL.revokeObjectURL(url);
+									}}
+								>
+									<Download /> 下载
+								</Button>
 							</CardHeader>
 							<CardContent className="max-h-[60vh] overflow-auto text-sm">
 								<Markdown>{previewQuery.data.content}</Markdown>
