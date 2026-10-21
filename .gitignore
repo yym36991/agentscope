@@ -168,3 +168,6 @@ lerna-debug.log*
 **/workspaces/
 # Local runtime data of the platform (stage artifacts, service logs)
 platform/backend/artifacts/
+
+docs/a*
+docs/A*

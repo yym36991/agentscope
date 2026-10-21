@@ -351,7 +351,7 @@ export function WorkbenchPage() {
 								ref={fileInputRef}
 								type="file"
 								hidden
-								accept=".md,.txt,.csv,.json,.log,.xml,.yaml,.yml,.py,.js,.ts,.tsx,.java,.sql,.html,.htm,.css,.sh,.ini,.toml,image/*,.pdf"
+								accept=".md,.txt,.csv,.json,.log,.xml,.yaml,.yml,.py,.js,.ts,.tsx,.java,.sql,.html,.htm,.css,.sh,.ini,.toml,.docx,image/*,.pdf"
 								onChange={(e) => {
 									setAttachment(e.target.files?.[0] ?? null);
 									// 重置以便重复选择同一文件
@@ -364,7 +364,7 @@ export function WorkbenchPage() {
 								variant="ghost"
 								className="shrink-0 text-muted-foreground"
 								disabled={!inProgress || messages.data?.is_running}
-								title="上传文件（md/txt/csv/源代码内联，图片/PDF 作为附件）"
+								title="上传文件（md/txt/csv/源代码/docx 内联，图片/PDF 作为附件）"
 								onClick={() => fileInputRef.current?.click()}
 							>
 								<Paperclip />

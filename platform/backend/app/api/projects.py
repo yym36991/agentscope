@@ -5,6 +5,7 @@ Thin transport layer: validation here, state-machine rules in
 app/services/flow.py (single implementation, §5).
 """
 import base64
+import io
 from pathlib import Path
 from typing import Annotated
 
@@ -449,8 +450,11 @@ async def chat_with_stage_run(
 # Text-like files are inlined as TextBlocks so any model can read
 # them; images and PDFs travel as base64 DataBlocks (the runtime's
 # OpenAI-compatible formatters map them to image_url / file_data).
-# Everything else (docx/xlsx/zip...) is silently DROPPED by the model
-# formatters, so it is rejected here with a clear message instead.
+# Word documents are neither — the formatters would silently DROP a
+# docx DataBlock — but they are the most common requirement-input
+# format in a bank, so .docx is extracted to text here (same inline
+# path as md/txt). Everything else (xlsx/zip/legacy .doc...) is
+# still rejected with a clear message instead of a silent drop.
 _TEXT_INLINE_EXTS = {
     ".md", ".txt", ".csv", ".json", ".log", ".xml", ".yaml", ".yml",
     ".py", ".js", ".ts", ".tsx", ".java", ".sql", ".html", ".htm",
@@ -459,6 +463,54 @@ _TEXT_INLINE_EXTS = {
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 _TEXT_INLINE_LIMIT = 512 * 1024  # decoded characters
 _UPLOAD_LIMIT = 8 * 1024 * 1024  # raw bytes
+
+
+def _docx_to_text(raw: bytes) -> str:
+    """Extract a .docx body as readable markdown-ish text.
+
+    Paragraphs keep their heading level (style names are English or
+    localized "标题 N"), tables become pipe tables in document order.
+    Images cannot be conveyed on the text path and are reported as
+    skipped so the agent (and user) know content was left behind.
+    """
+    from docx import Document
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
+
+    doc = Document(io.BytesIO(raw))
+    parts: list[str] = []
+    for child in doc.element.body.iterchildren():
+        if child.tag.endswith("}p"):
+            para = Paragraph(child, doc)
+            text = para.text.strip()
+            if not text:
+                continue
+            style = (para.style.name or "").lower()
+            if style.startswith("heading") or style.startswith("标题"):
+                level = "".join(c for c in style if c.isdigit())
+                parts.append("#" * min(int(level or 1), 6) + " " + text)
+            else:
+                parts.append(text)
+        elif child.tag.endswith("}tbl"):
+            table = Table(child, doc)
+            rows = [
+                [cell.text.strip().replace("\n", " ") for cell in row.cells]
+                for row in table.rows
+            ]
+            rows = [r for r in rows if any(r)]
+            if not rows:
+                continue
+            # pad ragged rows (merged cells) to one column count
+            width = max(len(r) for r in rows)
+            rows = [r + [""] * (width - len(r)) for r in rows]
+            parts.append(
+                "| " + " | ".join(rows[0]) + " |\n"
+                + "| " + " | ".join(["---"] * width) + " |\n"
+                + "\n".join("| " + " | ".join(r) + " |" for r in rows[1:])
+            )
+    if len(doc.inline_shapes) > 0:
+        parts.append(f"（注：文档内 {len(doc.inline_shapes)} 张图片无法以文本提取，已跳过）")
+    return "\n\n".join(parts)
 
 
 @router.post("/stage-runs/{run_id}/chat-upload")
@@ -508,6 +560,31 @@ async def chat_with_upload(
                 detail="文本文件超过 512KB，请拆分后再上传",
             )
         blocks = [{"type": "text", "text": f"【文件：{name}】\n{decoded}"}]
+    elif suffix == ".docx":
+        try:
+            extracted = _docx_to_text(raw)
+        except Exception:
+            raise HTTPException(
+                status_code=415,
+                detail="docx 解析失败：文件可能损坏或不是有效的 Word 文档，"
+                "请用 Word 重新另存为 .docx 后重试",
+            ) from None
+        if not extracted.strip():
+            raise HTTPException(
+                status_code=415,
+                detail="docx 中没有可提取的文本（可能是纯图片文档）",
+            )
+        if len(extracted) > _TEXT_INLINE_LIMIT:
+            raise HTTPException(
+                status_code=413,
+                detail="docx 提取出的文本超过 512KB，请拆分后重试",
+            )
+        blocks = [
+            {
+                "type": "text",
+                "text": f"【文件：{name}（Word 文档，已提取正文文本）】\n{extracted}",
+            }
+        ]
     elif (
         media.startswith("image/")
         or suffix in _IMAGE_EXTS
@@ -529,8 +606,9 @@ async def chat_with_upload(
     else:
         raise HTTPException(
             status_code=415,
-            detail="暂不支持该格式（docx/xlsx 等会被模型层丢弃）："
-            "请转为 md/txt/csv（文本）、png/jpg（图片）或 pdf",
+            detail="暂不支持该格式（模型层会丢弃该二进制内容）："
+            "请转为 md/txt/csv/docx（文本）、png/jpg（图片）或 pdf；"
+            "旧版 .doc / xlsx 请另存或导出为受支持格式",
         )
 
     message = (text or "").strip() or f"我上传了文件「{name}」，请查收。"
