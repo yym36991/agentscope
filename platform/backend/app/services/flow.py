@@ -152,6 +152,24 @@ async def _latest_approved_artifact(
     )
 
 
+async def _latest_return_comment(
+    db: AsyncSession, project: Project, stage: StageKey
+) -> str | None:
+    """Comment of the most recent RETURNED run of *stage*."""
+    task = await db.scalar(
+        select(ApprovalTask)
+        .join(StageRun, ApprovalTask.stage_run_id == StageRun.id)
+        .where(
+            StageRun.project_id == project.id,
+            StageRun.stage == stage,
+            StageRun.status == StageRunStatus.RETURNED,
+        )
+        .order_by(ApprovalTask.id.desc())
+        .limit(1)
+    )
+    return task.comment if task else None
+
+
 async def start_stage(
     db: AsyncSession, project: Project, stage: StageKey, user: User
 ) -> tuple[StageRun, str | None]:
@@ -256,6 +274,16 @@ async def start_stage(
                     f"\n\n上一阶段已批准的产物《{upstream.title}》如下，"
                     f"请以它为本阶段的输入（如需补充信息再向用户澄清）："
                     f"\n\n---\n{content}\n---"
+                )
+            # A rework round opens a FRESH session — without the
+            # approver's comment the agent would not know why the
+            # previous round was rejected (its draft still lies in
+            # the shared workspace for it to re-read).
+            return_comment = await _latest_return_comment(db, project, stage)
+            if return_comment:
+                kickoff += (
+                    f"\n\n【上一轮退回意见】请针对以下意见重新产出："
+                    f"\n\n{return_comment}"
                 )
             await client.send_message(agent_id, session_id, kickoff)
         else:
