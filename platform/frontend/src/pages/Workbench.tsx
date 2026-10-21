@@ -6,6 +6,7 @@ import {
 	Download,
 	FileText,
 	Loader2,
+	Paperclip,
 	Send,
 	ShieldQuestion,
 	X,
@@ -72,10 +73,21 @@ export function WorkbenchPage() {
 	// ---------- send ----------
 
 	const [draft, setDraft] = useState('');
+	const [attachment, setAttachment] = useState<File | null>(null);
+	const fileInputRef = useRef<HTMLInputElement>(null);
 	const chat = useMutation({
 		mutationFn: (content: string) => api.chat(rid, content),
 		onSuccess: () => {
 			setDraft('');
+			queryClient.invalidateQueries({ queryKey: ['messages', rid] });
+		},
+		onError: (err) => toast.error(err.message),
+	});
+	const uploadChat = useMutation({
+		mutationFn: () => api.uploadChat(rid, attachment!, draft.trim() || undefined),
+		onSuccess: () => {
+			setDraft('');
+			setAttachment(null);
 			queryClient.invalidateQueries({ queryKey: ['messages', rid] });
 		},
 		onError: (err) => toast.error(err.message),
@@ -152,6 +164,14 @@ export function WorkbenchPage() {
 
 	if (!currentRun) return <p className="p-6 text-sm text-muted-foreground">加载中…</p>;
 	const inProgress = currentRun.status === 'in_progress';
+
+	// 有附件时草稿可空；两者皆空才无东西可发
+	const sending = chat.isPending || uploadChat.isPending;
+	const canSend = !!(draft.trim() || attachment) && inProgress && !messages.data?.is_running && !sending;
+	const doSend = () => {
+		if (attachment) uploadChat.mutate();
+		else if (draft.trim()) chat.mutate(draft.trim());
+	};
 
 	return (
 		<ResizablePanelGroup orientation="horizontal" className="h-full">
@@ -262,32 +282,74 @@ export function WorkbenchPage() {
 						<form
 							onSubmit={(e) => {
 								e.preventDefault();
-								if (draft.trim() && !messages.data?.is_running) chat.mutate(draft.trim());
+								if (canSend) doSend();
 							}}
 							className="flex items-end gap-2"
 						>
-							<textarea
-								className="max-h-40 min-h-10 flex-1 resize-none rounded-md border bg-transparent px-3 py-2 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
-								placeholder={
-									inProgress
-										? messages.data?.is_running
-											? '智能体正在回复…'
-											: '输入消息，Enter 发送，Shift+Enter 换行'
-										: '该阶段不在进行中，对话已冻结'
-								}
-								value={draft}
-								disabled={!inProgress || messages.data?.is_running}
-								onChange={(e) => setDraft(e.target.value)}
-								onKeyDown={(e) => {
-									if (e.key === 'Enter' && !e.shiftKey) {
-										e.preventDefault();
-										if (draft.trim() && !messages.data?.is_running) chat.mutate(draft.trim());
+							<div className="flex min-w-0 flex-1 flex-col gap-2">
+								{attachment && (
+									<div className="flex items-center gap-2 rounded-md border bg-muted/40 px-2.5 py-1.5 text-xs">
+										<FileText className="size-3.5 shrink-0 text-muted-foreground" />
+										<span className="min-w-0 flex-1 truncate">
+											{attachment.name}
+											<span className="ml-1 text-muted-foreground">
+												({(attachment.size / 1024).toFixed(1)}KB)
+											</span>
+										</span>
+										<button
+											type="button"
+											className="shrink-0 text-muted-foreground hover:text-foreground"
+											onClick={() => setAttachment(null)}
+										>
+											<X className="size-3.5" />
+										</button>
+									</div>
+								)}
+								<textarea
+									className="max-h-40 min-h-10 w-full resize-none rounded-md border bg-transparent px-3 py-2 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
+									placeholder={
+										inProgress
+											? messages.data?.is_running
+												? '智能体正在回复…'
+												: '输入消息，Enter 发送，Shift+Enter 换行；可附文件（需求文档/源代码/截图）'
+											: '该阶段不在进行中，对话已冻结'
 									}
+									value={draft}
+									disabled={!inProgress || messages.data?.is_running}
+									onChange={(e) => setDraft(e.target.value)}
+									onKeyDown={(e) => {
+										if (e.key === 'Enter' && !e.shiftKey) {
+											e.preventDefault();
+											if (canSend) doSend();
+										}
+									}}
+									rows={2}
+								/>
+							</div>
+							<input
+								ref={fileInputRef}
+								type="file"
+								hidden
+								accept=".md,.txt,.csv,.json,.log,.xml,.yaml,.yml,.py,.js,.ts,.tsx,.java,.sql,.html,.htm,.css,.sh,.ini,.toml,image/*,.pdf"
+								onChange={(e) => {
+									setAttachment(e.target.files?.[0] ?? null);
+									// 重置以便重复选择同一文件
+									e.target.value = '';
 								}}
-								rows={2}
 							/>
-							<Button type="submit" size="icon" disabled={!draft.trim() || !inProgress || messages.data?.is_running || chat.isPending}>
-								{chat.isPending ? <Loader2 className="animate-spin" /> : <Send />}
+							<Button
+								type="button"
+								size="icon"
+								variant="ghost"
+								className="shrink-0 text-muted-foreground"
+								disabled={!inProgress || messages.data?.is_running}
+								title="上传文件（md/txt/csv/源代码内联，图片/PDF 作为附件）"
+								onClick={() => fileInputRef.current?.click()}
+							>
+								<Paperclip />
+							</Button>
+							<Button type="submit" size="icon" disabled={!canSend}>
+								{sending ? <Loader2 className="animate-spin" /> : <Send />}
 							</Button>
 						</form>
 					</div>

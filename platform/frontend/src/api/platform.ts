@@ -35,11 +35,19 @@ async function request<T>(path: string, method = 'GET', body?: unknown): Promise
 	const headers: Record<string, string> = {};
 	const token = getToken();
 	if (token) headers['Authorization'] = `Bearer ${token}`;
-	if (body !== undefined) headers['Content-Type'] = 'application/json';
+	// FormData bodies keep the browser's multipart boundary header.
+	if (body !== undefined && !(body instanceof FormData)) {
+		headers['Content-Type'] = 'application/json';
+	}
 	const res = await fetch(`${BASE}${path}`, {
 		method,
 		headers,
-		body: body !== undefined ? JSON.stringify(body) : undefined,
+		body:
+			body === undefined
+				? undefined
+				: body instanceof FormData
+					? body
+					: JSON.stringify(body),
 	});
 	if (res.status === 401 && !path.startsWith('/auth/')) {
 		clearToken();
@@ -162,6 +170,16 @@ export const api = {
 	// ---------- stage-run conversation ----------
 	chat: (runId: number, content: string) =>
 		request<{ ok: boolean; session_id: string }>(`/stage-runs/${runId}/chat`, 'POST', { content }),
+	uploadChat: (runId: number, file: File, text?: string) => {
+		const form = new FormData();
+		form.append('file', file);
+		if (text) form.append('text', text);
+		return request<{ ok: boolean; session_id: string; file: string }>(
+			`/stage-runs/${runId}/chat-upload`,
+			'POST',
+			form,
+		);
+	},
 	messages: (runId: number) => request<MessagesOut>(`/stage-runs/${runId}/messages`),
 	confirm: (runId: number, confirmed: boolean, toolCallIds?: string[], allowAll?: boolean) =>
 		request<{ ok: boolean; confirmed: boolean; tool_calls: string[]; allow_all_applied: boolean }>(

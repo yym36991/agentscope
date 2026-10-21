@@ -4,9 +4,11 @@
 Thin transport layer: validation here, state-machine rules in
 app/services/flow.py (single implementation, §5).
 """
+import base64
 from pathlib import Path
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -376,6 +378,48 @@ async def get_run_artifact(
 
 
 
+async def _relay_chat(
+    db: AsyncSession,
+    run: StageRun,
+    project: Project,
+    message: str,
+    blocks: list[dict] | None = None,
+) -> str:
+    """Shared tail of the two chat relays: ensure the session, self-heal
+    the model config, deliver the message. Returns the session id.
+
+    The model PATCH is skipped when a run holds the session (409): a
+    running reply already carries the config it was started with, and
+    the runtime refuses mid-run changes anyway.
+    """
+    client = get_runtime_client()
+    try:
+        session_id, agent_id = await flow.ensure_stage_session(db, run, project)
+        model = await client.default_chat_model_config()
+        if model is None:
+            raise HTTPException(
+                status_code=503,
+                detail="平台尚未配置模型凭证（sys:runtime 名下没有 "
+                "credential），请联系管理员或用引导脚本配置后再对话",
+            )
+        try:
+            await client.update_session_model(agent_id, session_id, model)
+        except RuntimeCallError as exc:
+            if exc.status != 409:
+                raise
+        await client.send_message(agent_id, session_id, message, blocks)
+    except FlowError as exc:
+        raise _flow_http(exc) from exc
+    except RuntimeCallError as exc:
+        if exc.status == 409:
+            raise HTTPException(
+                status_code=409,
+                detail="智能体正在处理上一条消息，请等它完成后再发",
+            ) from exc
+        raise _flow_http(exc) from exc
+    return session_id
+
+
 @router.post("/stage-runs/{run_id}/chat")
 async def chat_with_stage_run(
     run_id: int,
@@ -396,21 +440,102 @@ async def chat_with_stage_run(
             detail=f"run #{run.id} is {run.status.value}, "
             f"chat is only open while in_progress",
         )
-    client = get_runtime_client()
-    try:
-        session_id, agent_id = await flow.ensure_stage_session(db, run, project)
-        model = await client.default_chat_model_config()
-        if model is None:
-            raise HTTPException(
-                status_code=503,
-                detail="平台尚未配置模型凭证（sys:runtime 名下没有 "
-                "credential），请联系管理员或用引导脚本配置后再对话",
-            )
-        await client.update_session_model(agent_id, session_id, model)
-        await client.send_message(agent_id, session_id, payload.content)
-    except (FlowError, RuntimeCallError) as exc:
-        raise _flow_http(exc) from exc
+    session_id = await _relay_chat(db, run, project, payload.content)
     return {"ok": True, "session_id": session_id}
+
+
+# ---------- chat with file upload ----------
+
+# Text-like files are inlined as TextBlocks so any model can read
+# them; images and PDFs travel as base64 DataBlocks (the runtime's
+# OpenAI-compatible formatters map them to image_url / file_data).
+# Everything else (docx/xlsx/zip...) is silently DROPPED by the model
+# formatters, so it is rejected here with a clear message instead.
+_TEXT_INLINE_EXTS = {
+    ".md", ".txt", ".csv", ".json", ".log", ".xml", ".yaml", ".yml",
+    ".py", ".js", ".ts", ".tsx", ".java", ".sql", ".html", ".htm",
+    ".css", ".sh", ".bat", ".ini", ".toml",
+}
+_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+_TEXT_INLINE_LIMIT = 512 * 1024  # decoded characters
+_UPLOAD_LIMIT = 8 * 1024 * 1024  # raw bytes
+
+
+@router.post("/stage-runs/{run_id}/chat-upload")
+async def chat_with_upload(
+    run_id: int,
+    file: Annotated[UploadFile, File()],
+    text: Annotated[str | None, Form(max_length=20_000)] = None,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Relay a user message with one attached file into the run's
+    session — the requirement agent reading an existing需求文档, the
+    testing agent reading source code, an approver pasting a
+    screenshot all go through here."""
+    run, project = await _get_run_or_404(db, run_id, user)
+    if run.status is not StageRunStatus.IN_PROGRESS:
+        raise HTTPException(
+            status_code=409,
+            detail=f"run #{run.id} is {run.status.value}, "
+            f"chat is only open while in_progress",
+        )
+
+    name = file.filename or "upload.bin"
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=415, detail="文件为空")
+    if len(raw) > _UPLOAD_LIMIT:
+        raise HTTPException(
+            status_code=413,
+            detail=f"文件超过 {_UPLOAD_LIMIT // (1024 * 1024)}MB 上限",
+        )
+    suffix = Path(name).suffix.lower()
+    media = file.content_type or ""
+
+    blocks: list[dict]
+    if suffix in _TEXT_INLINE_EXTS or media.startswith("text/"):
+        try:
+            decoded = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            raise HTTPException(
+                status_code=415,
+                detail="该文件不是 UTF-8 文本，请另存为 md/txt 后重试",
+            ) from None
+        if len(decoded) > _TEXT_INLINE_LIMIT:
+            raise HTTPException(
+                status_code=413,
+                detail="文本文件超过 512KB，请拆分后再上传",
+            )
+        blocks = [{"type": "text", "text": f"【文件：{name}】\n{decoded}"}]
+    elif (
+        media.startswith("image/")
+        or suffix in _IMAGE_EXTS
+        or suffix == ".pdf"
+    ):
+        if suffix == ".pdf" and not media:
+            media = "application/pdf"
+        blocks = [
+            {
+                "type": "data",
+                "source": {
+                    "type": "base64",
+                    "data": base64.b64encode(raw).decode("ascii"),
+                    "media_type": media or "application/octet-stream",
+                },
+                "name": name,
+            }
+        ]
+    else:
+        raise HTTPException(
+            status_code=415,
+            detail="暂不支持该格式（docx/xlsx 等会被模型层丢弃）："
+            "请转为 md/txt/csv（文本）、png/jpg（图片）或 pdf",
+        )
+
+    message = (text or "").strip() or f"我上传了文件「{name}」，请查收。"
+    session_id = await _relay_chat(db, run, project, message, blocks)
+    return {"ok": True, "session_id": session_id, "file": name}
 
 
 @router.post("/stage-runs/{run_id}/confirm")

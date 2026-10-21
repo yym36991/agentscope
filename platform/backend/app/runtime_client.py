@@ -66,8 +66,15 @@ class RuntimeClient:
                 503, f"runtime unreachable at {self._base_url}: {exc}"
             ) from exc
         if resp.status_code >= 400:
+            # 404/409 keep their meaning (not found / session busy) so
+            # callers can react; anything else is an unexpected runtime
+            # failure and maps to 502.
+            status = (
+                resp.status_code if resp.status_code in (404, 409) else 502
+            )
             raise RuntimeCallError(
-                502, f"runtime {method} {path} -> {resp.status_code}: {resp.text[:200]}"
+                status,
+                f"runtime {method} {path} -> {resp.status_code}: {resp.text[:200]}",
             )
         if resp.status_code == 204 or not resp.content:
             return None
@@ -185,9 +192,25 @@ class RuntimeClient:
     # ---------- chat ----------
 
     async def send_message(
-        self, agent_id: str, session_id: str, text: str
+        self,
+        agent_id: str,
+        session_id: str,
+        text: str,
+        blocks: list[dict] | None = None,
     ) -> None:
-        """Fire-and-forget user message; output lands on the SSE stream."""
+        """Fire-and-forget user message; output lands on the SSE stream.
+
+        *blocks* are extra content blocks appended after the text —
+        e.g. the DataBlock of an uploaded file (base64 image/PDF) or an
+        inlined TextBlock. Text alone is the plain chat path.
+        """
+        content: list[dict] = []
+        if text:
+            content.append({"type": "text", "text": text})
+        if blocks:
+            content += blocks
+        if not content:
+            return
         await self._request(
             "POST",
             "/chat/",
@@ -197,7 +220,7 @@ class RuntimeClient:
                 "input": {
                     "name": "user",
                     "role": "user",
-                    "content": [{"type": "text", "text": text}],
+                    "content": content,
                 },
             },
         )
