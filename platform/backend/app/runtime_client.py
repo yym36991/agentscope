@@ -82,19 +82,30 @@ class RuntimeClient:
 
     # ---------- agents ----------
 
-    async def find_agent_by_name(self, name: str) -> str | None:
-        """Agent id for *name* (None if absent), with a small cache."""
-        if name in self._agent_ids:
-            return self._agent_ids[name]
+    async def find_agent_record(self, name: str) -> dict | None:
+        """Full agent record for *name* (None if absent).
+
+        The seed refresh path diffs the stored system_prompt against
+        its target and PATCHes on change — the record, not just the id.
+        """
         data = await self._request("GET", "/agent/")
         for agent in data["agents"]:  # type: ignore[index]
             agent_name = (agent.get("data") or {}).get("name") or agent.get(
                 "name"
             )
             if agent_name == name:
-                self._agent_ids[name] = agent["id"]
-                return agent["id"]
+                return agent
         return None
+
+    async def find_agent_by_name(self, name: str) -> str | None:
+        """Agent id for *name* (None if absent), with a small cache."""
+        if name in self._agent_ids:
+            return self._agent_ids[name]
+        agent = await self.find_agent_record(name)
+        if agent is None:
+            return None
+        self._agent_ids[name] = agent["id"]
+        return agent["id"]
 
     async def create_agent(self, name: str, system_prompt: str) -> str:
         """Seed an agent owned by sys:runtime; returns its id."""
@@ -106,6 +117,19 @@ class RuntimeClient:
         agent_id = data["agent_id"]  # type: ignore[index]
         self._agent_ids[name] = agent_id
         return agent_id
+
+    async def update_agent(self, agent_id: str, *, system_prompt: str) -> None:
+        """Replace an agent's system prompt (seed refresh path).
+
+        Partial PATCH: id, name, workspace and skills stay put, so
+        existing sessions and the skill partition are unaffected —
+        only future replies pick up the new prompt.
+        """
+        await self._request(
+            "PATCH",
+            f"/agent/{agent_id}",
+            json={"system_prompt": system_prompt},
+        )
 
     # ---------- credentials ----------
 

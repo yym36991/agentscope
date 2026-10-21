@@ -65,7 +65,7 @@ export function ProjectDetailPage() {
 		try {
 			const run = await api.startStage(pid, stage);
 			if (run.warning) toast.warning(run.warning);
-			else toast.success(`「${STAGE_LABELS[stage]}」阶段已启动`);
+			else toast.success(`「${STAGE_LABELS[stage]}」阶段已开启，发送首条消息后智能体开工`);
 			invalidate();
 			navigate(`/projects/${pid}/workbench/${run.id}`);
 		} catch (err) {
@@ -81,7 +81,9 @@ export function ProjectDetailPage() {
 		onSuccess: (res, vars) => {
 			toast.success(
 				vars.action === 'approve'
-					? `已通过，项目推进到「${STAGE_LABELS[res.project_stage] ?? res.project_stage}」`
+					? res.project_status === 'accepted'
+						? '已通过，项目验收完成'
+						: `已通过，「${STAGE_LABELS[res.project_stage] ?? res.project_stage}」阶段可开启`
 					: '已退回，发起人可重新开启该阶段',
 			);
 			setDecideTask(null);
@@ -151,9 +153,15 @@ export function ProjectDetailPage() {
 										{state === 'in_progress' && <span className="text-blue-600">进行中</span>}
 										{state === 'under_review' && <span className="text-amber-600">待审批</span>}
 										{state === 'available' && (
-											<Button size="sm" variant="outline" disabled={starting === stage} onClick={() => startStage(stage)}>
+											<Button
+												size="sm"
+												variant="outline"
+												disabled={starting === stage}
+												title="开启本阶段：只创建运行，进入工作台补充说明或材料后再开始与智能体协作"
+												onClick={() => startStage(stage)}
+											>
 												{starting === stage ? <Loader2 className="animate-spin" /> : <Play />}
-												启动
+												开启
 											</Button>
 										)}
 										{state === 'locked' && <span className="text-muted-foreground">—</span>}

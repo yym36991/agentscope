@@ -9,6 +9,7 @@ import {
 	Loader2,
 	OctagonX,
 	Paperclip,
+	Play,
 	Send,
 	ShieldQuestion,
 	X,
@@ -186,8 +187,13 @@ export function WorkbenchPage() {
 	// 运行时对停靠会话只接受确认事件，普通消息会使其以空错误气泡失败。
 	const sending = chat.isPending || uploadChat.isPending;
 	const parked = asking.length > 0;
+	// 阶段已开启但智能体还没动工（会话里还没有任何消息）：首条消息会由
+	// L1 组装成启动消息，自动附上游已批准产物与退回意见，所以这里既允许
+	// 先写开场白/传材料，也允许什么都不填直接点「开始」。
+	const notStarted =
+		inProgress && visible.length === 0 && !messages.data?.is_running;
 	const canSend =
-		!!(draft.trim() || attachment) &&
+		(notStarted || !!(draft.trim() || attachment)) &&
 		inProgress &&
 		!messages.data?.is_running &&
 		!parked &&
@@ -195,6 +201,7 @@ export function WorkbenchPage() {
 	const doSend = () => {
 		if (attachment) uploadChat.mutate();
 		else if (draft.trim()) chat.mutate(draft.trim());
+		else if (notStarted) chat.mutate('请开始本阶段工作。');
 	};
 
 	// 产物/工作区文件共用的客户端下载
@@ -252,11 +259,21 @@ export function WorkbenchPage() {
 			<ResizablePanel defaultSize="52%" minSize="30rem">
 				<div className="flex h-full flex-col">
 					<div ref={scrollerRef} className="min-h-0 flex-1 space-y-4 overflow-auto p-4">
-						{visible.length === 0 && (
-							<p className="pt-10 text-center text-sm text-muted-foreground">
-								向「{STAGE_LABELS[currentRun.stage] ?? ''}」智能体描述你的需求，开始本阶段工作。
-							</p>
-						)}
+						{visible.length === 0 &&
+							(notStarted ? (
+								<div className="mx-auto mt-20 max-w-md space-y-3 rounded-lg border border-dashed p-6 text-center">
+									<Play className="mx-auto size-8 text-muted-foreground" />
+									<p className="text-sm font-medium">阶段已开启，智能体待命</p>
+									<p className="text-xs leading-relaxed text-muted-foreground">
+										发送首条消息即开工：上游各阶段已批准产物与退回意见（如有）会自动附在首条消息里。
+										可先写开场说明，或上传材料（如《功能点明细》xlsx）再点「开始」。
+									</p>
+								</div>
+							) : (
+								<p className="pt-10 text-center text-sm text-muted-foreground">
+									向「{STAGE_LABELS[currentRun.stage] ?? ''}」智能体描述你的需求，开始本阶段工作。
+								</p>
+							))}
 						{visible.map((m) => (
 							<ASMessageBubble
 								key={m.id ?? `${m.role}-${Math.random()}`}
@@ -356,11 +373,13 @@ export function WorkbenchPage() {
 									placeholder={
 										!inProgress
 											? '该阶段不在进行中，对话已冻结'
-											: messages.data?.is_running
-												? '智能体正在回复…'
-												: parked
-													? '智能体在等待工具确认，请先处理上方请求（或中止本轮）'
-													: '输入消息，Enter 发送，Shift+Enter 换行；可附文件（需求文档/源代码/截图）'
+											: notStarted
+												? '开场说明（可选）：智能体将带着上游产物开工；也可先上传材料，直接点「开始」'
+												: messages.data?.is_running
+													? '智能体正在回复…'
+													: parked
+														? '智能体在等待工具确认，请先处理上方请求（或中止本轮）'
+														: '输入消息，Enter 发送，Shift+Enter 换行；可附文件（需求文档/源代码/截图）'
 									}
 									value={draft}
 									disabled={!inProgress || messages.data?.is_running || parked}
@@ -378,7 +397,7 @@ export function WorkbenchPage() {
 								ref={fileInputRef}
 								type="file"
 								hidden
-								accept=".md,.txt,.csv,.json,.log,.xml,.yaml,.yml,.py,.js,.ts,.tsx,.java,.sql,.html,.htm,.css,.sh,.ini,.toml,.docx,image/*,.pdf"
+								accept=".md,.txt,.csv,.json,.log,.xml,.yaml,.yml,.py,.js,.ts,.tsx,.java,.sql,.html,.htm,.css,.sh,.ini,.toml,.docx,.xlsx,image/*,.pdf"
 								onChange={(e) => {
 									setAttachment(e.target.files?.[0] ?? null);
 									// 重置以便重复选择同一文件
@@ -391,13 +410,24 @@ export function WorkbenchPage() {
 								variant="ghost"
 								className="shrink-0 text-muted-foreground"
 								disabled={!inProgress || messages.data?.is_running || parked}
-								title="上传文件（md/txt/csv/源代码/docx 内联，图片/PDF 作为附件）"
+								title="上传文件（md/txt/csv/源代码/docx/xlsx 内联，图片/PDF 作为附件）"
 								onClick={() => fileInputRef.current?.click()}
 							>
 								<Paperclip />
 							</Button>
-							<Button type="submit" size="icon" disabled={!canSend}>
-								{sending ? <Loader2 className="animate-spin" /> : <Send />}
+							<Button
+								type="submit"
+								size="icon"
+								disabled={!canSend}
+								title={notStarted ? '开始：发送首条消息，智能体即带着上游产物开工' : undefined}
+							>
+								{sending ? (
+									<Loader2 className="animate-spin" />
+								) : notStarted && !draft.trim() && !attachment ? (
+									<Play />
+								) : (
+									<Send />
+								)}
 							</Button>
 						</form>
 					</div>

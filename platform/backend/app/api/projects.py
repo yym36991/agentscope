@@ -292,14 +292,19 @@ async def start_stage(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> StartStageOut:
+    """Open the next run of *stage* — DB only, the agent is NOT fired.
+
+    The runtime session and the kickoff context (upstream artifacts,
+    return comment) wait for the run's first chat message, so between
+    审批/开启 and 开始 the user has a window to add an opening note
+    and materials (e.g. the 功能点明细 xlsx for the budget stage).
+    """
     project = await _get_project_or_404(db, project_id, user)
     try:
-        run, warning = await flow.start_stage(db, project, stage, user)
-    except (FlowError, RuntimeCallError) as exc:
+        run = await flow.start_stage(db, project, stage, user)
+    except FlowError as exc:
         raise _flow_http(exc) from exc
-    out = StartStageOut.from_run(run)
-    out.warning = warning
-    return out
+    return StartStageOut.from_run(run)
 
 
 @router.post("/stage-runs/{run_id}/submit", response_model=ArtifactOut)
@@ -389,6 +394,11 @@ async def _relay_chat(
     """Shared tail of the two chat relays: ensure the session, self-heal
     the model config, deliver the message. Returns the session id.
 
+    The FIRST message into a run's session doubles as the kickoff:
+    opening a stage does not fire the agent, so the stage context
+    (all upstream approved artifacts, plus the return comment on a
+    rework round) rides along here.
+
     The model PATCH is skipped when a run holds the session (409): a
     running reply already carries the config it was started with, and
     the runtime refuses mid-run changes anyway.
@@ -407,6 +417,15 @@ async def _relay_chat(
                 status_code=409,
                 detail="智能体正在等待工具调用的确认，请先在对话中"
                 "批准或拒绝（或中止本轮）后再发新消息",
+            )
+        # Empty projection on an idle session = no kickoff has landed
+        # yet — including the self-heal case where an earlier attempt
+        # failed right after creating the session.
+        data = await client.get_messages(agent_id, session_id)
+        if not data["messages"]:
+            message = (
+                f"{await flow.build_kickoff(db, run, project)}"
+                f"\n\n【用户开场补充】\n{message}"
             )
         model = await client.default_chat_model_config()
         if model is None:
@@ -462,10 +481,12 @@ async def chat_with_stage_run(
 # Text-like files are inlined as TextBlocks so any model can read
 # them; images and PDFs travel as base64 DataBlocks (the runtime's
 # OpenAI-compatible formatters map them to image_url / file_data).
-# Word documents are neither — the formatters would silently DROP a
-# docx DataBlock — but they are the most common requirement-input
-# format in a bank, so .docx is extracted to text here (same inline
-# path as md/txt). Everything else (xlsx/zip/legacy .doc...) is
+# Word documents and Excel workbooks are neither — the formatters
+# would silently DROP a docx/xlsx DataBlock — but they are the most
+# common requirement/costing inputs in a bank (the 功能点明细 for
+# the budget stage arrives as xlsx from the user's own external
+# model), so .docx/.xlsx are extracted to text here (same inline
+# path as md/txt). Everything else (zip/legacy .doc/.xls...) is
 # still rejected with a clear message instead of a silent drop.
 _TEXT_INLINE_EXTS = {
     ".md", ".txt", ".csv", ".json", ".log", ".xml", ".yaml", ".yml",
@@ -522,6 +543,52 @@ def _docx_to_text(raw: bytes) -> str:
             )
     if len(doc.inline_shapes) > 0:
         parts.append(f"（注：文档内 {len(doc.inline_shapes)} 张图片无法以文本提取，已跳过）")
+    return "\n\n".join(parts)
+
+
+_XLSX_ROW_CAP = 500  # rows per sheet; bigger sheets truncate with a note
+
+
+def _xlsx_to_text(raw: bytes) -> str:
+    """Extract an .xlsx workbook as markdown pipe tables, one per sheet.
+
+    Row one of each sheet is treated as the header; trailing blank
+    rows (exports pad with them) are trimmed; merged cells come out
+    as empty; a monster sheet truncates instead of blowing up the
+    inline text block.
+    """
+    from openpyxl import load_workbook
+
+    wb = load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
+    parts: list[str] = []
+    for ws in wb.worksheets:
+        rows = [list(r) for r in ws.iter_rows(values_only=True)]
+        while rows and all(c is None or not str(c).strip() for c in rows[-1]):
+            rows.pop()
+        if not rows:
+            continue
+        total = len(rows)
+        if total > _XLSX_ROW_CAP:
+            rows = rows[:_XLSX_ROW_CAP]
+        width = max(len(r) for r in rows)
+        cells = [
+            [
+                ""
+                if c is None
+                else str(c).replace("|", "\\|").replace("\n", " ")
+                for c in r
+            ]
+            + [""] * (width - len(r))
+            for r in rows
+        ]
+        table = (
+            "| " + " | ".join(cells[0]) + " |\n"
+            + "| " + " | ".join(["---"] * width) + " |\n"
+            + "\n".join("| " + " | ".join(r) + " |" for r in cells[1:])
+        )
+        if total > _XLSX_ROW_CAP:
+            table += f"\n\n（注：该工作表共 {total} 行，仅提取前 {_XLSX_ROW_CAP} 行）"
+        parts.append(f"## 工作表：{ws.title}\n\n{table}")
     return "\n\n".join(parts)
 
 
@@ -597,6 +664,31 @@ async def chat_with_upload(
                 "text": f"【文件：{name}（Word 文档，已提取正文文本）】\n{extracted}",
             }
         ]
+    elif suffix == ".xlsx":
+        try:
+            extracted = _xlsx_to_text(raw)
+        except Exception:
+            raise HTTPException(
+                status_code=415,
+                detail="xlsx 解析失败：文件可能损坏或不是有效的 Excel "
+                "文档，请用 Excel 重新另存为 .xlsx 后重试",
+            ) from None
+        if not extracted.strip():
+            raise HTTPException(
+                status_code=415,
+                detail="xlsx 中没有可提取的数据（所有工作表均为空）",
+            )
+        if len(extracted) > _TEXT_INLINE_LIMIT:
+            raise HTTPException(
+                status_code=413,
+                detail="xlsx 提取出的内容超过 512KB，请拆分工作表后再上传",
+            )
+        blocks = [
+            {
+                "type": "text",
+                "text": f"【文件：{name}（Excel 表格，已提取为文本表格）】\n{extracted}",
+            }
+        ]
     elif (
         media.startswith("image/")
         or suffix in _IMAGE_EXTS
@@ -619,8 +711,8 @@ async def chat_with_upload(
         raise HTTPException(
             status_code=415,
             detail="暂不支持该格式（模型层会丢弃该二进制内容）："
-            "请转为 md/txt/csv/docx（文本）、png/jpg（图片）或 pdf；"
-            "旧版 .doc / xlsx 请另存或导出为受支持格式",
+            "请转为 md/txt/csv/docx/xlsx（文本）、png/jpg（图片）或 pdf；"
+            "旧版 .doc / .xls 请另存或导出为受支持格式",
         )
 
     message = (text or "").strip() or f"我上传了文件「{name}」，请查收。"

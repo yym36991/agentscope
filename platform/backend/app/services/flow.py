@@ -26,7 +26,7 @@ from app.models import (
     StageRunStatus,
     User,
 )
-from app.runtime_client import RuntimeCallError, get_runtime_client
+from app.runtime_client import get_runtime_client
 
 STAGE_ORDER: list[StageKey] = [
     StageKey.REQUIREMENT,
@@ -136,20 +136,87 @@ async def ensure_stage_session(
     return session_id, agent_id
 
 
-async def _latest_approved_artifact(
+_KICKOFF_ARTIFACT_CAP = 30_000  # chars per injected upstream artifact
+
+
+async def _approved_artifacts_by_stage(
     db: AsyncSession, project: Project
-) -> ArtifactVersion | None:
-    """Newest artifact of any approved run of *project*."""
-    return await db.scalar(
-        select(ArtifactVersion)
-        .join(StageRun, ArtifactVersion.stage_run_id == StageRun.id)
-        .where(
-            StageRun.project_id == project.id,
-            StageRun.status == StageRunStatus.APPROVED,
+) -> dict[StageKey, ArtifactVersion]:
+    """Newest approved artifact per stage, for the kickoff injection."""
+    rows = (
+        await db.execute(
+            select(ArtifactVersion, StageRun.stage)
+            .join(StageRun, ArtifactVersion.stage_run_id == StageRun.id)
+            .where(
+                StageRun.project_id == project.id,
+                StageRun.status == StageRunStatus.APPROVED,
+            )
+            .order_by(ArtifactVersion.id.desc())
         )
-        .order_by(ArtifactVersion.id.desc())
-        .limit(1)
+    ).all()
+    latest: dict[StageKey, ArtifactVersion] = {}
+    for artifact, stage in rows:  # newest first — first hit per stage wins
+        latest.setdefault(stage, artifact)
+    return latest
+
+
+async def build_kickoff(
+    db: AsyncSession, run: StageRun, project: Project
+) -> str:
+    """The stage-opening context that rides on a run's FIRST message.
+
+    Opening a stage no longer fires the agent — the user gets a window
+    to add an opening note and materials first (e.g. the 功能点明细
+    xlsx their own external model produced) — so the context the agent
+    needs travels with that first message instead: every previously
+    approved artifact in stage order, plus the approver's comment on a
+    rework round.
+    """
+    kickoff = (
+        f"【阶段启动】项目《{project.name}》的「"
+        f"{STAGE_AGENT_NAMES[run.stage]}」阶段已开始（第 {run.round} 轮）。"
+        f"请先向用户确认你需要了解的信息，再开始本阶段工作。"
     )
+
+    approved = await _approved_artifacts_by_stage(db, project)
+    sections: list[str] = []
+    for stage in STAGE_ORDER[: STAGE_ORDER.index(run.stage)]:
+        artifact = approved.get(stage)
+        if artifact is None:
+            continue
+        try:
+            content = (
+                Path(get_settings().artifact_dir) / artifact.storage_path
+            ).read_text(encoding="utf-8")
+        except OSError:
+            # archived file gone — say so instead of failing the chat
+            sections.append(
+                f"=== {STAGE_AGENT_NAMES[stage]} · 《{artifact.title}》 ===\n"
+                f"（产物归档文件读取失败，请向用户索取该阶段产物）"
+            )
+            continue
+        content = content.lstrip("\ufeff")
+        if len(content) > _KICKOFF_ARTIFACT_CAP:
+            content = content[:_KICKOFF_ARTIFACT_CAP] + "\n…（内容过长，已截断）"
+        sections.append(
+            f"=== {STAGE_AGENT_NAMES[stage]} · 《{artifact.title}》 ===\n{content}"
+        )
+    if sections:
+        kickoff += (
+            "\n\n上游各阶段已批准的产物如下，请以它们为本阶段的输入"
+            "（如需补充信息再向用户澄清）：\n\n" + "\n\n".join(sections)
+        )
+
+    # A rework round opens a FRESH session — without the approver's
+    # comment the agent would not know why the previous round was
+    # rejected (its draft still lies in the shared workspace for it
+    # to re-read).
+    return_comment = await _latest_return_comment(db, project, run.stage)
+    if return_comment:
+        kickoff += (
+            f"\n\n【上一轮退回意见】请针对以下意见重新产出：\n\n{return_comment}"
+        )
+    return kickoff
 
 
 async def _latest_return_comment(
@@ -172,12 +239,15 @@ async def _latest_return_comment(
 
 async def start_stage(
     db: AsyncSession, project: Project, stage: StageKey, user: User
-) -> tuple[StageRun, str | None]:
+) -> StageRun:
     """Open a new run of *stage* (round + 1 per previous rework).
 
-    Returns (run, warning): the runtime session is best-effort — if the
-    runtime is unreachable the run still opens and the chat relay
-    retries session creation, with *warning* telling the caller why.
+    Deliberately pure DB work: the runtime session and the kickoff
+    context are deferred to the run's first chat relay (see
+    :func:`build_kickoff`), so between 开启 and 开始 the user has a
+    window to add an opening note and materials before the agent
+    starts working — and an unreachable runtime can never leave a
+    half-started run behind either.
     """
     if project.status in (
         ProjectStatus.ACCEPTED,
@@ -247,53 +317,7 @@ async def start_stage(
     db.add(run)
     await db.commit()
     await db.refresh(run)
-
-    warning: str | None = None
-    try:
-        session_id, agent_id = await ensure_stage_session(db, run, project)
-        client = get_runtime_client()
-        model = await client.default_chat_model_config()
-        if model is not None:
-            kickoff = (
-                f"【阶段启动】项目《{project.name}》的「"
-                f"{STAGE_AGENT_NAMES[stage]}」阶段已启动（第 {run.round} 轮）。"
-                f"请先向用户确认你需要了解的信息，再开始本阶段工作。"
-            )
-            # Stages are strictly ordered, so the newest approved
-            # artifact of the project is the previous stage's
-            # deliverable — the input this stage builds on. Without
-            # it the next agent would have to ask the user to re-paste
-            # everything.
-            upstream = await _latest_approved_artifact(db, project)
-            if upstream is not None:
-                content = (
-                    Path(get_settings().artifact_dir)
-                    / upstream.storage_path
-                ).read_text(encoding="utf-8")
-                kickoff += (
-                    f"\n\n上一阶段已批准的产物《{upstream.title}》如下，"
-                    f"请以它为本阶段的输入（如需补充信息再向用户澄清）："
-                    f"\n\n---\n{content}\n---"
-                )
-            # A rework round opens a FRESH session — without the
-            # approver's comment the agent would not know why the
-            # previous round was rejected (its draft still lies in
-            # the shared workspace for it to re-read).
-            return_comment = await _latest_return_comment(db, project, stage)
-            if return_comment:
-                kickoff += (
-                    f"\n\n【上一轮退回意见】请针对以下意见重新产出："
-                    f"\n\n{return_comment}"
-                )
-            await client.send_message(agent_id, session_id, kickoff)
-        else:
-            warning = (
-                "阶段已开启，但 sys:runtime 名下还没有模型凭证，"
-                "智能体暂时无法对话；配置凭证后可直接继续。"
-            )
-    except RuntimeCallError as exc:
-        warning = f"阶段已开启，但运行时暂不可用：{exc.detail}"
-    return run, warning
+    return run
 
 
 async def submit_run(
