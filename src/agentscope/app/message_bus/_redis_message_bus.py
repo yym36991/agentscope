@@ -8,12 +8,17 @@ from contextlib import asynccontextmanager
 from typing import Any, Callable, Self, TYPE_CHECKING
 
 from ._base import MessageBus
+from ..._logging import logger
 
 if TYPE_CHECKING:
     from redis.asyncio import ConnectionPool, Redis
 else:
     ConnectionPool = Any
     Redis = Any
+
+# Set once a server has told us it lacks XTRIM's MINID option, so the
+# degradation warning is not repeated for every checkpoint trim.
+_minid_unsupported_warned = False
 
 # Reads and removes a batch in one atomic step. Doing so in two
 # round-trips lets competing consumers on the same key both read an
@@ -401,7 +406,25 @@ class RedisMessageBus(MessageBus):  # pylint: disable=too-many-public-methods
             await self._client.delete(key)
             return
         # XTRIM MINID drops entries with id < before_id.
-        await self._client.xtrim(key, minid=before_id)
+        from redis.exceptions import ResponseError
+
+        try:
+            await self._client.xtrim(key, minid=before_id)
+        except ResponseError:
+            # Redis < 6.2 rejects XTRIM's MINID option outright with a
+            # plain "syntax error". Degrade instead of failing the run:
+            # every replay log is already bounded at append time via
+            # ``XADD ... MAXLEN ~N``, so skipping this trim only delays
+            # reclamation — no live entry is lost.
+            global _minid_unsupported_warned
+            if not _minid_unsupported_warned:
+                _minid_unsupported_warned = True
+                logger.warning(
+                    "Redis server does not support XTRIM MINID "
+                    "(requires 6.2+); skipping replay-log checkpoint "
+                    "trims. Append-side MAXLEN caps still bound log "
+                    "growth.",
+                )
 
     # ------------------------------------------------------------------
     # Mode F — registry map (hash-keyed namespace)
