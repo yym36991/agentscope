@@ -101,10 +101,13 @@ class ConfirmIn(BaseModel):
     """HITL verdict for the run's asking tool calls.
 
     ``tool_call_ids`` empty/None = every currently-asking call.
+    ``allow_all``（仅 confirmed=true 时生效）额外把会话切到
+    ``accept_edits``：工作目录内的后续文件读写不再逐个询问。
     """
 
     confirmed: bool = True
     tool_call_ids: list[str] | None = None
+    allow_all: bool = False
 
 
 class SubmitLatestIn(BaseModel):
@@ -429,6 +432,17 @@ async def confirm_stage_tools(
         raise HTTPException(
             status_code=409, detail="没有等待确认的工具调用"
         )
+    # "全部允许"：停靠时把会话切到 accept_edits（运行中会被运行时
+    # 409 拒绝——此时退回仅确认本次，下一轮停靠再试即可）。
+    allow_all_applied = False
+    if payload.allow_all and payload.confirmed:
+        try:
+            await client.set_session_permission_mode(
+                agent_id, run.session_id, "accept_edits"
+            )
+            allow_all_applied = True
+        except RuntimeCallError:
+            pass
     try:
         await client.confirm_tool_calls(
             agent_id, run.session_id, last["id"], asking, payload.confirmed
@@ -439,6 +453,7 @@ async def confirm_stage_tools(
         "ok": True,
         "confirmed": payload.confirmed,
         "tool_calls": [b["name"] for b in asking],
+        "allow_all_applied": allow_all_applied,
     }
 
 

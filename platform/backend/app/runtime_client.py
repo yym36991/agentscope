@@ -163,6 +163,21 @@ class RuntimeClient:
             json={"chat_model_config": chat_model_config},
         )
 
+    async def set_session_permission_mode(
+        self, agent_id: str, session_id: str, mode: str
+    ) -> None:
+        """Set the session's permission mode (e.g. ``accept_edits``).
+
+        The runtime rejects this with 409 while a run holds the session,
+        so apply it while the reply is parked (``awaiting_permission``).
+        """
+        await self._request(
+            "PATCH",
+            f"/sessions/{session_id}",
+            params={"agent_id": agent_id},
+            json={"permission_mode": mode},
+        )
+
     # ---------- chat ----------
 
     async def send_message(

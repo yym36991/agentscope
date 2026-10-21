@@ -81,8 +81,15 @@ export function WorkbenchPage() {
 	});
 
 	const confirm = useMutation({
-		mutationFn: ({ block, ok }: { block: ToolCallBlock; ok: boolean }) =>
-			api.confirm(rid, ok, [block.id]),
+		mutationFn: ({
+			block,
+			ok,
+			allowAll,
+		}: {
+			block?: ToolCallBlock;
+			ok: boolean;
+			allowAll?: boolean;
+		}) => api.confirm(rid, ok, block ? [block.id] : undefined, allowAll),
 		onSuccess: () => queryClient.invalidateQueries({ queryKey: ['messages', rid] }),
 		onError: (err) => toast.error(err.message),
 	});
@@ -193,6 +200,15 @@ export function WorkbenchPage() {
 							<div className="flex items-center gap-2 text-sm font-medium text-amber-900 dark:text-amber-200">
 								<ShieldQuestion className="size-4" />
 								智能体请求执行 {asking.length} 个工具调用，请确认
+								<Button
+									size="sm"
+									variant="outline"
+									className="ml-auto"
+									disabled={confirm.isPending}
+									onClick={() => confirm.mutate({ ok: true, allowAll: true })}
+								>
+									<CheckCheck /> 全部允许
+								</Button>
 							</div>
 							<div className="mt-2 space-y-1.5">
 								{asking.map((b) => (

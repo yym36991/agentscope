@@ -157,11 +157,11 @@ export const api = {
 	chat: (runId: number, content: string) =>
 		request<{ ok: boolean; session_id: string }>(`/stage-runs/${runId}/chat`, 'POST', { content }),
 	messages: (runId: number) => request<MessagesOut>(`/stage-runs/${runId}/messages`),
-	confirm: (runId: number, confirmed: boolean, toolCallIds?: string[]) =>
-		request<{ ok: boolean; confirmed: boolean; tool_calls: string[] }>(
+	confirm: (runId: number, confirmed: boolean, toolCallIds?: string[], allowAll?: boolean) =>
+		request<{ ok: boolean; confirmed: boolean; tool_calls: string[]; allow_all_applied: boolean }>(
 			`/stage-runs/${runId}/confirm`,
 			'POST',
-			{ confirmed, tool_call_ids: toolCallIds },
+			{ confirmed, tool_call_ids: toolCallIds, allow_all: allowAll },
 		),
 
 	// ---------- artifacts & approvals ----------
