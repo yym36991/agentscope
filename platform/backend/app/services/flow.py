@@ -136,6 +136,22 @@ async def ensure_stage_session(
     return session_id, agent_id
 
 
+async def _latest_approved_artifact(
+    db: AsyncSession, project: Project
+) -> ArtifactVersion | None:
+    """Newest artifact of any approved run of *project*."""
+    return await db.scalar(
+        select(ArtifactVersion)
+        .join(StageRun, ArtifactVersion.stage_run_id == StageRun.id)
+        .where(
+            StageRun.project_id == project.id,
+            StageRun.status == StageRunStatus.APPROVED,
+        )
+        .order_by(ArtifactVersion.id.desc())
+        .limit(1)
+    )
+
+
 async def start_stage(
     db: AsyncSession, project: Project, stage: StageKey, user: User
 ) -> tuple[StageRun, str | None]:
@@ -220,13 +236,28 @@ async def start_stage(
         client = get_runtime_client()
         model = await client.default_chat_model_config()
         if model is not None:
-            await client.send_message(
-                agent_id,
-                session_id,
+            kickoff = (
                 f"【阶段启动】项目《{project.name}》的「"
                 f"{STAGE_AGENT_NAMES[stage]}」阶段已启动（第 {run.round} 轮）。"
-                f"请先向用户确认你需要了解的信息，再开始本阶段工作。",
+                f"请先向用户确认你需要了解的信息，再开始本阶段工作。"
             )
+            # Stages are strictly ordered, so the newest approved
+            # artifact of the project is the previous stage's
+            # deliverable — the input this stage builds on. Without
+            # it the next agent would have to ask the user to re-paste
+            # everything.
+            upstream = await _latest_approved_artifact(db, project)
+            if upstream is not None:
+                content = (
+                    Path(get_settings().artifact_dir)
+                    / upstream.storage_path
+                ).read_text(encoding="utf-8")
+                kickoff += (
+                    f"\n\n上一阶段已批准的产物《{upstream.title}》如下，"
+                    f"请以它为本阶段的输入（如需补充信息再向用户澄清）："
+                    f"\n\n---\n{content}\n---"
+                )
+            await client.send_message(agent_id, session_id, kickoff)
         else:
             warning = (
                 "阶段已开启，但 sys:runtime 名下还没有模型凭证，"
@@ -243,6 +274,7 @@ async def submit_run(
     project: Project,
     title: str,
     content: str,
+    fmt: ArtifactFormat = ArtifactFormat.MD,
 ) -> ArtifactVersion:
     """Attach artifact v{n} to *run* and hand it to the approver."""
     if run.status != StageRunStatus.IN_PROGRESS:
@@ -260,7 +292,8 @@ async def submit_run(
     ) + 1
 
     rel_path = (
-        f"{project.id}/{run.stage.value}/run{run.id}-v{version_no}.md"
+        f"{project.id}/{run.stage.value}/"
+        f"run{run.id}-v{version_no}.{fmt.value}"
     )
     abs_path = Path(get_settings().artifact_dir) / rel_path
     abs_path.parent.mkdir(parents=True, exist_ok=True)
@@ -270,7 +303,7 @@ async def submit_run(
         stage_run_id=run.id,
         version_no=version_no,
         title=title,
-        format=ArtifactFormat.MD,
+        format=fmt,
         storage_path=rel_path,
     )
     run.status = StageRunStatus.UNDER_REVIEW
