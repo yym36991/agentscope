@@ -60,7 +60,7 @@ export function ProjectsPage() {
 							<DialogHeader>
 								<DialogTitle>新建项目</DialogTitle>
 								<DialogDescription>
-									创建后从「需求分析」阶段开始，六个阶段串行推进。
+									创建后从「需求生成」阶段开始，六个阶段串行推进。
 								</DialogDescription>
 							</DialogHeader>
 							<div className="space-y-2">

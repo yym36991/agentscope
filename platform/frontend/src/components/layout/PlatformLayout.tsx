@@ -19,7 +19,7 @@ export function PlatformLayout() {
 				<div className="flex items-center gap-2">
 					<Link to="/projects" className="flex items-center gap-2 font-semibold">
 						<FolderKanban className="size-5" />
-						软件造价评估平台
+						软件全生命周期管控平台
 					</Link>
 				</div>
 				<div className="flex items-center gap-3 text-sm text-muted-foreground">

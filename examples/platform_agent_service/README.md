@@ -1,6 +1,6 @@
 # 平台 Agent Service（造价平台运行时入口）
 
-软件造价评估平台的 AgentScope 运行时（architecture.md §2 的运行时层）。
+软件全生命周期管控平台的 AgentScope 运行时（architecture.md §2 的运行时层）。
 **派生自上游示例 [`examples/agent_service`](../agent_service)**——那边保持
 零改动，方便随上游同步；平台的组装差异全部收敛在本目录。
 

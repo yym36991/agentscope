@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""软件造价评估平台的 AgentScope 运行时入口。
+"""软件全生命周期管控平台的 AgentScope 运行时入口。
 
 派生自 ``examples/agent_service/main.py``（上游原版保持零改动），
 差异只有运行时组装三件套，全部可用环境变量覆盖：

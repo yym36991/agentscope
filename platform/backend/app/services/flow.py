@@ -40,7 +40,7 @@ STAGE_ORDER: list[StageKey] = [
 # Runtime agent name per stage. The seed script (scripts/seed.py)
 # creates these under sys:runtime; M1 seeds only the first.
 STAGE_AGENT_NAMES: dict[StageKey, str] = {
-    StageKey.REQUIREMENT: "需求分析",
+    StageKey.REQUIREMENT: "需求生成",
     StageKey.PROTOTYPE: "原型设计",
     StageKey.BUDGET: "工时预算罗盘",
     StageKey.TESTCASES: "测试用例",

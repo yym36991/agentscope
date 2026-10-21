@@ -1,6 +1,6 @@
 # 造价平台前端（platform-frontend）
 
-软件造价评估平台的 SPA —— **一个前端、两个视图**（architecture.md §3）：
+软件全生命周期管控平台的 SPA —— **一个前端、两个视图**（architecture.md §3）：
 
 - **视图 A · 项目生命周期**（类禅道）：项目列表 / 详情（六阶段时间线、
   阶段运行、审批中心），路由 `/projects`、`/projects/:id`

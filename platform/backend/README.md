@@ -1,6 +1,6 @@
 # 造价平台 L1 编排层后端（cost-platform-backend）
 
-软件造价评估平台的业务编排层（architecture.md §2 的 L1）。它是**业务控制面**：
+软件全生命周期管控平台的业务编排层（architecture.md §2 的 L1）。它是**业务控制面**：
 用户/部门/项目/审批/产物版本都归它管，真正的智能体执行交给 AgentScope 运行时。
 
 ## 边界（硬约束）
@@ -56,7 +56,7 @@ API 文档：http://localhost:8100/docs
       （提交→待审→通过/退回；退回重开 round+1；审批通过自动推进项目阶段）
 - [x] runtime_client 防腐层 + 阶段会话生命周期
       （启动阶段即建会话；运行时不可用时降级为懒创建，对话中自愈）
-- [x] 需求分析智能体接入（scripts/seed.py 种到 sys:runtime 名下）
+- [x] 需求生成智能体接入（scripts/seed.py 种到 sys:runtime 名下）
 
 ## 一次性引导
 

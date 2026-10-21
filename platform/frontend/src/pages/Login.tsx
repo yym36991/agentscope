@@ -40,7 +40,7 @@ export function LoginPage() {
 		<div className="flex h-screen items-center justify-center bg-muted/40">
 			<Card className="w-full max-w-sm">
 				<CardHeader>
-					<CardTitle>软件造价评估平台</CardTitle>
+					<CardTitle>软件全生命周期管控平台</CardTitle>
 					<CardDescription>
 						输入用户名登录；开发环境未设口令的账号可直接登录。
 					</CardDescription>
