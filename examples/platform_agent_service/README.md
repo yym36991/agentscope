@@ -12,7 +12,7 @@
 | 消息总线 | `InMemoryMessageBus`（注释里推荐 Redis） | `RedisMessageBus`（`AS_REDIS_HOST`/`AS_REDIS_PORT`） |
 | 下载签名密钥 | 随机 | 固定（`AS_DOWNLOAD_SECRET`），重启/多实例下签名 URL 不失效 |
 
-三者都是环境变量可覆盖，默认值即本机开发环境（PG 5432 / Redis 6379）。
+三者都是环境变量可覆盖，默认值即通用开发环境（PG 5432 / Redis 6379）；本机 start.sh 固定以 `AS_REDIS_PORT=6380` 拉起（6379 被本机 rediszt3 Windows 服务占用）。
 
 ## 运行
 

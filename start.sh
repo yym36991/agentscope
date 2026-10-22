@@ -4,7 +4,7 @@
 #
 # 按依赖顺序启动(前一个就绪后才启动下一个):
 #   1. PostgreSQL       平台/运行时落盘库  端口 5432
-#   2. Redis            总线/缓存         端口 6379
+#   2. Redis            总线/缓存         端口 6380(6379 被 rediszt3 服务占用)
 #   3. Agent Service    AgentScope 运行时  端口 8000
 #   4. Web UI           前端 5173 + Node 后端 3100
 #   5. Platform API     L1 编排层后端      端口 8100
@@ -13,6 +13,7 @@
 # 所有服务的输出都追加写入 logs/ 目录:
 #   logs/postgresql.log  logs/redis.log  logs/backend.log
 #   logs/frontend.log    logs/platform.log  logs/platform-frontend.log
+#   (logs/pg_ctl.out 单独收 pg_ctl 自身输出, 不能写进 postgresql.log —— 见 PG 段注意 2)
 #
 # ▶ 执行命令 —— Git Bash 终端里(任意目录均可):
 #     bash /d/Users/code/agentscope/start.sh
@@ -30,6 +31,9 @@ PG_DIR="/d/Users/58369/postgresql"
 REDIS_DIR="/d/Users/code/tools/redis"
 LOG_DIR="$BASE_DIR/logs"
 PID_FILE="$LOG_DIR/service-pids.txt"
+# 6379 被本机 rediszt3 Windows 服务(带密码)长期占用, 平台自用 Redis 固定
+# 走 6380; 运行时经 AS_REDIS_PORT 环境变量覆盖 main.py 里的默认端口
+REDIS_PORT=6380
 
 # ---------- 工具函数 ----------
 
@@ -77,15 +81,27 @@ else
         "$PG_DIR/bin/initdb.exe" -D "$PG_DIR/data" -U postgres \
             -A trust -E UTF8 --locale=C >> "$LOG_DIR/postgresql.log" 2>&1
     fi
+    # 机器硬重启(断电/强关)后会残留死掉的 postmaster.pid, pg_ctl 会误判
+    # "另一个程序可能在阻止服务器进程"而拒绝启动。本分支前提是 5432 无监听,
+    # 再确认系统里没有任何 postgres.exe 进程后, 该文件必是死残留, 可安全清除
+    # (2026-10-22 重启后踩坑)
+    if [ -f "$PG_DIR/data/postmaster.pid" ] \
+        && ! tasklist //FI "IMAGENAME eq postgres.exe" 2>/dev/null | grep -q "postgres.exe"; then
+        echo "      清理上次未正常关机残留的 postmaster.pid"
+        rm -f "$PG_DIR/data/postmaster.pid"
+    fi
     echo "[1/6] 启动 PostgreSQL (端口 5432)..."
     {
         echo ""
         echo "===== $(date '+%Y-%m-%d %H:%M:%S') postgresql starting ====="
     } >> "$LOG_DIR/postgresql.log"
-    # 注意: pg_ctl 的输出必须重定向到文件, 不能接管道 —— postgres.exe
+    # 注意 1: pg_ctl 的输出必须重定向到文件, 不能接管道 —— postgres.exe
     # 会继承管道句柄, 导致管道永远等不到 EOF(脚本卡死)
+    # 注意 2: pg_ctl 自身输出不能与 -l 指向同一个文件 —— bash 的 >> 与
+    # pg_ctl 打开 -l 日志会撞 Windows 共享冲突, postgres.exe 拉不起来
+    # (2026-10-22 机器重启后首次真正走到本分支时踩坑)
     "$PG_DIR/bin/pg_ctl.exe" -D "$PG_DIR/data" \
-        -l "$LOG_DIR/postgresql.log" -w start >> "$LOG_DIR/postgresql.log" 2>&1
+        -l "$LOG_DIR/postgresql.log" -w start >> "$LOG_DIR/pg_ctl.out" 2>&1
     if wait_port 5432 20; then
         echo "      PostgreSQL 就绪"
         # 确保两个业务库存在(已存在则跳过)
@@ -94,35 +110,36 @@ else
                 "SELECT 1 FROM pg_database WHERE datname='$db'" 2>/dev/null \
                 | grep -q 1 || \
                 "$PG_DIR/bin/createdb.exe" -U postgres -h localhost "$db" \
-                    >> "$LOG_DIR/postgresql.log" 2>&1
+                    >> "$LOG_DIR/pg_ctl.out" 2>&1
         done
     else
-        echo "      [错误] PostgreSQL 启动失败, 最近日志 (logs/postgresql.log):"
+        echo "      [错误] PostgreSQL 启动失败, 最近日志 (logs/pg_ctl.out / logs/postgresql.log):"
+        tail -n 5 "$LOG_DIR/pg_ctl.out" | sed 's/^/        /'
         tail -n 5 "$LOG_DIR/postgresql.log" | sed 's/^/        /'
         exit 1
     fi
 fi
 
 # ---------- 2. Redis ----------
-if port_up 6379; then
-    echo "[2/6] Redis 已在运行 (端口 6379), 跳过"
+if port_up "$REDIS_PORT"; then
+    echo "[2/6] Redis 已在运行 (端口 $REDIS_PORT), 跳过"
 else
     if [ ! -f "$REDIS_DIR/redis-server.exe" ]; then
         echo "[错误] 未找到 $REDIS_DIR/redis-server.exe"
         exit 1
     fi
-    echo "[2/6] 启动 Redis (端口 6379)..."
+    echo "[2/6] 启动 Redis (端口 $REDIS_PORT)..."
     {
         echo ""
         echo "===== $(date '+%Y-%m-%d %H:%M:%S') redis starting ====="
     } >> "$LOG_DIR/redis.log"
     cd "$REDIS_DIR"
-    nohup ./redis-server.exe redis.windows.conf --port 6379 \
+    nohup ./redis-server.exe redis.windows.conf --port "$REDIS_PORT" \
         >> "$LOG_DIR/redis.log" 2>&1 &
     REDIS_PID=$!
     cd "$BASE_DIR"
     echo "redis $(winpid_of "$REDIS_PID")" >> "$PID_FILE"
-    if wait_port 6379 20; then
+    if wait_port "$REDIS_PORT" 20; then
         echo "      Redis 就绪"
     else
         echo "      [错误] Redis 启动失败, 最近日志 (logs/redis.log):"
@@ -140,6 +157,8 @@ else
         echo ""
         echo "===== $(date '+%Y-%m-%d %H:%M:%S') backend starting ====="
     } >> "$LOG_DIR/backend.log"
+    # 运行时连平台自用 Redis(6380), 覆盖 main.py 里 6379 的默认值
+    export AS_REDIS_PORT="$REDIS_PORT"
     cd "$BASE_DIR/examples/platform_agent_service"
     nohup "$BASE_DIR/.venv/Scripts/python.exe" main.py \
         >> "$LOG_DIR/backend.log" 2>&1 &
@@ -249,7 +268,7 @@ fi
 echo "------------------------------------------"
 echo " 全部服务已启动:"
 echo "   PostgreSQL:       localhost:5432 (库: platform / agentscope)"
-echo "   Redis:            localhost:6379"
+echo "   Redis:            localhost:6380 (6379 留给本机 rediszt3 服务)"
 echo "   运行时:           http://localhost:8000  (API 文档 /docs)"
 echo "   Web UI:           http://localhost:5173  (AgentScope 自带, 调试用)"
 echo "   Platform API:     http://localhost:8100  (API 文档 /docs)"
