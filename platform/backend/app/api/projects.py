@@ -193,6 +193,12 @@ class MemberAddIn(BaseModel):
     role: Literal["manager", "member", "approver", "observer"]
 
 
+class RemoveMemberOut(BaseModel):
+    """Removal result: how many in-flight tasks were re-routed."""
+
+    reassigned_tasks: int
+
+
 # ---------- helpers ----------
 
 def _flow_http(exc: FlowError | RuntimeCallError) -> HTTPException:
@@ -284,7 +290,7 @@ async def get_project(
 # ---------- project members ----------
 # Approval addressees resolve at submit time (flow.resolve_approver,
 # Decision D8): a member added as APPROVER receives every task submitted
-# afterwards; tasks already addressed keep their original approver.
+# afterwards; removing one re-routes their PENDING tasks to the owner.
 
 
 @router.get(
@@ -371,14 +377,15 @@ async def add_member(
 
 
 @router.delete(
-    "/projects/{project_id}/members/{user_id}", status_code=204
+    "/projects/{project_id}/members/{user_id}",
+    response_model=RemoveMemberOut,
 )
 async def remove_member(
     project_id: int,
     user_id: int,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> None:
+) -> RemoveMemberOut:
     project = await _get_project_or_404(db, project_id, user)
     if project.owner_user_id != user.id:
         raise HTTPException(
@@ -396,8 +403,27 @@ async def remove_member(
     )
     if member is None:
         raise HTTPException(status_code=404, detail="member not found")
+
+    # Decision D8 freezes the addressee at submit time, so a removed
+    # member could strand PENDING tasks nobody can act on. Re-route them
+    # to the owner in the same transaction — removal never orphans work.
+    pending = (
+        await db.scalars(
+            select(ApprovalTask)
+            .join(StageRun, ApprovalTask.stage_run_id == StageRun.id)
+            .where(
+                StageRun.project_id == project_id,
+                ApprovalTask.approver_user_id == user_id,
+                ApprovalTask.status == ApprovalStatus.PENDING,
+            )
+        )
+    ).all()
+    for task in pending:
+        task.approver_user_id = project.owner_user_id
+
     await db.delete(member)
     await db.commit()
+    return RemoveMemberOut(reassigned_tasks=len(pending))
 
 
 # ---------- stage runs ----------

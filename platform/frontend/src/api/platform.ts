@@ -140,6 +140,11 @@ export const ROLE_LABELS: Record<string, string> = {
 	observer: '观察者',
 };
 
+export interface RemoveMemberOut {
+	/** 移除时自动改道给负责人的在途待审任务数 */
+	reassigned_tasks: number;
+}
+
 export interface MessagesOut {
 	messages: Msg[];
 	is_running: boolean;
@@ -242,7 +247,7 @@ export const api = {
 	addMember: (projectId: number, username: string, role: string) =>
 		request<MemberOut>(`/projects/${projectId}/members`, 'POST', { username, role }),
 	removeMember: (projectId: number, userId: number) =>
-		request<void>(`/projects/${projectId}/members/${userId}`, 'DELETE'),
+		request<RemoveMemberOut>(`/projects/${projectId}/members/${userId}`, 'DELETE'),
 };
 
 /** Asking tool calls of a message, for the HITL confirm bar. */

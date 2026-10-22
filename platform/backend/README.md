@@ -62,6 +62,8 @@ API 文档：http://localhost:8100/docs
 - [x] 阶段技能包：开启阶段会话时自动把技能目录装进智能体的 workspace
       分区（同智能体所有会话共享，运行时按 SKILL.md 哈希去重幂等）；
       首批落地测试用例阶段 7 法（examples/platform_agent_service/skills/testcases/）
+- [x] 移除成员守卫：删成员时，其名下本项目 PENDING 审批任务同事务
+      改道给负责人（返回改道数，前端提示 + 审批中心角标刷新）
 
 ## 一次性引导
 
@@ -94,7 +96,7 @@ POST /projects/{id}/stages/{stage}/start   开阶段运行（顺序+去重守卫
 GET  /projects/{id}/stage-runs 运行历史
 GET  /projects/{id}/members    成员列表（项目成员可见）
 POST /projects/{id}/members    加成员（仅负责人；用户名+角色，审批人/项目经理/成员/观察者）
-DELETE /projects/{id}/members/{uid}  移除成员（仅负责人）
+DELETE /projects/{id}/members/{uid}  移除成员（仅负责人；其在途待审任务自动改道给负责人）
 POST /stage-runs/{id}/chat     对话（转发到运行时会话，模型配置自愈）
 GET  /stage-runs/{id}/messages 会话消息（前端轮询用）
 POST /stage-runs/{id}/confirm  工具确认（HITL：允许/拒绝 asking 调用）

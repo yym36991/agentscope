@@ -75,7 +75,11 @@ export function ProjectDetailPage() {
 	});
 	const removeMember = useMutation({
 		mutationFn: (userId: number) => api.removeMember(pid, userId),
-		onSuccess: () => queryClient.invalidateQueries({ queryKey: ['members', pid] }),
+		onSuccess: ({ reassigned_tasks }) => {
+			toast.success(`已移除成员${reassigned_tasks > 0 ? `，${reassigned_tasks} 条在途审批已改道给你` : ''}`);
+			queryClient.invalidateQueries({ queryKey: ['members', pid] });
+			queryClient.invalidateQueries({ queryKey: ['approvals'] });
+		},
 		onError: (err) => toast.error(err.message),
 	});
 
@@ -248,7 +252,7 @@ export function ProjectDetailPage() {
 							<CardTitle className="text-base">项目成员</CardTitle>
 							<CardDescription>
 								添加「审批人」角色的成员后，新提交的产物将进入对方的「审批中心」；
-								已在途的审批任务仍归原审批人。
+								移除成员时，其名下在途待审任务自动改道回项目负责人。
 							</CardDescription>
 						</div>
 						{isOwner && (
