@@ -36,6 +36,15 @@ class Settings(BaseSettings):
     # Chat model the platform binds onto every stage session (§8.6:
     # the credential lives under sys:runtime, end users stay zero-config).
     runtime_model: str = "glm-5.3"
+    # Stage skill bundles the platform installs into an agent's
+    # workspace partition when it opens the stage's first session
+    # (subdir per stage, e.g. "testcases"; see services/flow.py).
+    runtime_skill_dir: str = str(
+        Path(__file__).resolve().parents[3]
+        / "examples"
+        / "platform_agent_service"
+        / "skills"
+    )
 
     # Where stage artifacts (PRD, prototypes...) are stored on disk.
     artifact_dir: str = str(

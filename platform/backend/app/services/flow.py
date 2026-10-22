@@ -7,6 +7,7 @@ the rules have exactly one implementation. Illegal transitions raise
 """
 from datetime import datetime, timezone
 from pathlib import Path
+import logging
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,7 +27,9 @@ from app.models import (
     StageRunStatus,
     User,
 )
-from app.runtime_client import get_runtime_client
+from app.runtime_client import RuntimeCallError, RuntimeClient, get_runtime_client
+
+logger = logging.getLogger(__name__)
 
 STAGE_ORDER: list[StageKey] = [
     StageKey.REQUIREMENT,
@@ -46,6 +49,15 @@ STAGE_AGENT_NAMES: dict[StageKey, str] = {
     StageKey.TESTCASES: "测试用例",
     StageKey.TESTING: "测试",
     StageKey.ACCEPTANCE: "验收审计",
+}
+
+# Stage skill bundles (subdir of settings.runtime_skill_dir, each holding
+# one skill dir per method). Installed into the agent's workspace
+# partition when the stage's first session opens — the partition is
+# shared by all of the agent's sessions and hash-deduped by the runtime,
+# so re-opening sessions stays a no-op. Stages absent here are bare.
+STAGE_SKILL_DIRS: dict[StageKey, str] = {
+    StageKey.TESTCASES: "testcases",
 }
 
 ACTIVE_RUN_STATUSES = (StageRunStatus.IN_PROGRESS, StageRunStatus.UNDER_REVIEW)
@@ -131,9 +143,38 @@ async def ensure_stage_session(
         name=f"project{project.id}-{run.stage.value}-run{run.id}",
         chat_model_config=await client.default_chat_model_config(),
     )
+    await _install_stage_skills(client, agent_id, session_id, run.stage)
     run.session_id = session_id
     await db.commit()
     return session_id, agent_id
+
+
+async def _install_stage_skills(
+    client: RuntimeClient, agent_id: str, session_id: str, stage: StageKey
+) -> None:
+    """Install the stage's skill bundle into the agent's workspace.
+
+    Best-effort by design: a missing dir or a failed install must never
+    block the conversation — the stage works bare, just less guided.
+    The runtime hash-dedups SKILL.md, so a re-created session of the
+    same agent is a cheap no-op.
+    """
+    bundle = STAGE_SKILL_DIRS.get(stage)
+    if bundle is None:
+        return
+    root = Path(get_settings().runtime_skill_dir) / bundle
+    if not root.is_dir():
+        logger.warning("stage skill bundle missing: %s", root)
+        return
+    for skill_dir in sorted(p for p in root.iterdir() if (p / "SKILL.md").is_file()):
+        try:
+            await client.add_workspace_skill(agent_id, session_id, str(skill_dir))
+        except RuntimeCallError as exc:
+            logger.warning(
+                "skill %s not installed (%s) — continuing without it",
+                skill_dir.name,
+                exc.detail,
+            )
 
 
 _KICKOFF_ARTIFACT_CAP = 30_000  # chars per injected upstream artifact

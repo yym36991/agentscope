@@ -198,6 +198,27 @@ class RuntimeClient:
             json={"chat_model_config": chat_model_config},
         )
 
+    # ---------- skills ----------
+
+    async def add_workspace_skill(
+        self, agent_id: str, session_id: str, skill_path: str
+    ) -> None:
+        """Install a local skill dir into the agent's workspace partition.
+
+        Deliberately uses the runtime's deprecated path-based endpoint:
+        the platform and runtime are co-deployed on one host with a
+        shared filesystem, and the path call is the simplest contract
+        (a multi-instance deployment would switch to the folder-upload
+        endpoint). Re-installing an unchanged skill is a no-op on the
+        runtime side (SKILL.md hash dedup), so callers may retry freely.
+        """
+        await self._request(
+            "POST",
+            "/workspace/skill",
+            params={"agent_id": agent_id, "session_id": session_id},
+            json={"skill_path": skill_path},
+        )
+
     async def set_session_permission_mode(
         self, agent_id: str, session_id: str, mode: str
     ) -> None:

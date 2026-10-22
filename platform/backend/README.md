@@ -59,6 +59,9 @@ API 文档：http://localhost:8100/docs
 - [x] 需求生成智能体接入（scripts/seed.py 种到 sys:runtime 名下）
 - [x] 角色分工：项目负责人视图 + 审批中心（审批人收件箱，产物预览审批；
       成员管理端点，APPROVER 角色按 D8 解析审批收件人）
+- [x] 阶段技能包：开启阶段会话时自动把技能目录装进智能体的 workspace
+      分区（同智能体所有会话共享，运行时按 SKILL.md 哈希去重幂等）；
+      首批落地测试用例阶段 7 法（examples/platform_agent_service/skills/testcases/）
 
 ## 一次性引导
 
