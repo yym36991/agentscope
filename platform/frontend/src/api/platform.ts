@@ -174,8 +174,12 @@ export const api = {
 			'POST',
 			password ? { username, password } : { username },
 		),
-	register: (username: string, password?: string) =>
-		request<UserOut>('/auth/register', 'POST', password ? { username, password } : { username }),
+	register: (username: string, password?: string, displayName?: string) =>
+		request<UserOut>('/auth/register', 'POST', {
+			username,
+			...(password ? { password } : {}),
+			...(displayName ? { display_name: displayName } : {}),
+		}),
 	me: () => request<UserOut>('/users/me'),
 
 	// ---------- projects & stages ----------
