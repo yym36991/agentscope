@@ -7,25 +7,28 @@ import {
 	Loader2,
 	MessagesSquare,
 	Play,
+	UserPlus,
+	X,
 } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { toast } from 'sonner';
 
-import { api, STAGE_LABELS, STAGE_ORDER } from '@/api/platform';
+import { api, ROLE_LABELS, STAGE_LABELS, STAGE_ORDER, type ApprovalOut } from '@/api/platform';
+import { useAuth } from '@/auth';
+import { ApprovalDecideDialog } from '@/components/approval/ApprovalDecideDialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import {
-	Dialog,
-	DialogClose,
-	DialogContent,
-	DialogDescription,
-	DialogFooter,
-	DialogHeader,
-	DialogTitle,
-} from '@/components/ui/dialog';
-import { Textarea } from '@/components/ui/textarea';
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from '@/components/ui/select';
 
 const RUN_STATUS: Record<string, string> = {
 	in_progress: '进行中',
@@ -34,12 +37,13 @@ const RUN_STATUS: Record<string, string> = {
 	returned: '已退回',
 };
 
-/** 视图 A 核心：项目生命周期（阶段时间线 + 运行 + 审批）。 */
+/** 视图 A 核心：项目生命周期（阶段时间线 + 运行 + 成员 + 审批）。 */
 export function ProjectDetailPage() {
 	const { projectId } = useParams();
 	const pid = Number(projectId);
 	const navigate = useNavigate();
 	const queryClient = useQueryClient();
+	const { user } = useAuth();
 
 	const project = useQuery({ queryKey: ['project', pid], queryFn: () => api.getProject(pid) });
 	const runs = useQuery({ queryKey: ['runs', pid], queryFn: () => api.listStageRuns(pid), refetchInterval: 5000 });
@@ -51,8 +55,29 @@ export function ProjectDetailPage() {
 	const projectApprovals = (approvals.data ?? []).filter((a) => a.project_id === pid);
 
 	const [starting, setStarting] = useState<string | null>(null);
-	const [decideTask, setDecideTask] = useState<number | null>(null);
-	const [comment, setComment] = useState('');
+	const [decideTask, setDecideTask] = useState<ApprovalOut | null>(null);
+
+	// 成员管理：只有负责人能增删，其余成员只读
+	const members = useQuery({ queryKey: ['members', pid], queryFn: () => api.listMembers(pid) });
+	const [addingMember, setAddingMember] = useState(false);
+	const [memberName, setMemberName] = useState('');
+	const [memberRole, setMemberRole] = useState('approver');
+
+	const addMember = useMutation({
+		mutationFn: () => api.addMember(pid, memberName.trim(), memberRole),
+		onSuccess: (m) => {
+			toast.success(`已添加 ${m.display_name || m.username}（${ROLE_LABELS[m.role] ?? m.role}）`);
+			setMemberName('');
+			setAddingMember(false);
+			queryClient.invalidateQueries({ queryKey: ['members', pid] });
+		},
+		onError: (err) => toast.error(err.message),
+	});
+	const removeMember = useMutation({
+		mutationFn: (userId: number) => api.removeMember(pid, userId),
+		onSuccess: () => queryClient.invalidateQueries({ queryKey: ['members', pid] }),
+		onError: (err) => toast.error(err.message),
+	});
 
 	const invalidate = () => {
 		queryClient.invalidateQueries({ queryKey: ['project', pid] });
@@ -75,28 +100,11 @@ export function ProjectDetailPage() {
 		}
 	};
 
-	const decide = useMutation({
-		mutationFn: ({ task, action, text }: { task: number; action: 'approve' | 'return'; text?: string }) =>
-			api.decide(task, action, text),
-		onSuccess: (res, vars) => {
-			toast.success(
-				vars.action === 'approve'
-					? res.project_status === 'accepted'
-						? '已通过，项目验收完成'
-						: `已通过，「${STAGE_LABELS[res.project_stage] ?? res.project_stage}」阶段可开启`
-					: '已退回，发起人可重新开启该阶段',
-			);
-			setDecideTask(null);
-			setComment('');
-			invalidate();
-		},
-		onError: (err) => toast.error(err.message),
-	});
-
 	if (project.isLoading) return <p className="p-6 text-sm text-muted-foreground">加载中…</p>;
 	if (project.isError || !project.data)
 		return <p className="p-6 text-sm text-destructive">项目不存在</p>;
 	const p = project.data;
+	const isOwner = p.owner_user_id === user?.id;
 
 	const stageState = (stage: string) => {
 		const stageRuns = (runs.data ?? []).filter((r) => r.stage === stage);
@@ -232,6 +240,92 @@ export function ProjectDetailPage() {
 					</CardContent>
 				</Card>
 
+				{/* 成员管理：负责人增删成员；添加「审批人」后，后续提交的
+				    产物会推送到对方的审批中心 */}
+				<Card>
+					<CardHeader className="flex-row items-center justify-between">
+						<div>
+							<CardTitle className="text-base">项目成员</CardTitle>
+							<CardDescription>
+								添加「审批人」角色的成员后，新提交的产物将进入对方的「审批中心」；
+								已在途的审批任务仍归原审批人。
+							</CardDescription>
+						</div>
+						{isOwner && (
+							<Button size="sm" variant="outline" onClick={() => setAddingMember(!addingMember)}>
+								<UserPlus /> 添加成员
+							</Button>
+						)}
+					</CardHeader>
+					<CardContent className="space-y-2">
+						{addingMember && isOwner && (
+							<form
+								className="flex items-end gap-2 rounded-lg border p-3"
+								onSubmit={(e) => {
+									e.preventDefault();
+									addMember.mutate();
+								}}
+							>
+								<div className="flex-1 space-y-1">
+									<Label htmlFor="member-name">用户名</Label>
+									<Input
+										id="member-name"
+										value={memberName}
+										onChange={(e) => setMemberName(e.target.value)}
+										placeholder="对方注册的用户名，如 approver1"
+									/>
+								</div>
+								<div className="space-y-1">
+									<Label>角色</Label>
+									<Select value={memberRole} onValueChange={setMemberRole}>
+										<SelectTrigger className="w-32">
+											<SelectValue />
+										</SelectTrigger>
+										<SelectContent>
+											<SelectItem value="approver">审批人</SelectItem>
+											<SelectItem value="manager">项目经理</SelectItem>
+											<SelectItem value="member">成员</SelectItem>
+											<SelectItem value="observer">观察者</SelectItem>
+										</SelectContent>
+									</Select>
+								</div>
+								<Button type="submit" size="sm" disabled={!memberName.trim() || addMember.isPending}>
+									{addMember.isPending && <Loader2 className="animate-spin" />}
+									添加
+								</Button>
+							</form>
+						)}
+						{(members.data ?? []).map((m) => (
+							<div
+								key={m.id}
+								className="flex items-center justify-between rounded-lg border px-3 py-2 text-sm"
+							>
+								<div className="flex items-center gap-3">
+									<span className="font-medium">{m.display_name || m.username}</span>
+									<span className="text-xs text-muted-foreground">@{m.username}</span>
+								</div>
+								<div className="flex items-center gap-3">
+									<Badge variant={m.role === 'approver' ? 'default' : 'secondary'}>
+										{ROLE_LABELS[m.role] ?? m.role}
+									</Badge>
+									{isOwner && m.user_id !== p.owner_user_id && (
+										<Button
+											size="sm"
+											variant="ghost"
+											className="h-6 w-6 px-0 text-destructive"
+											title="移除成员"
+											disabled={removeMember.isPending}
+											onClick={() => removeMember.mutate(m.user_id)}
+										>
+											<X />
+										</Button>
+									)}
+								</div>
+							</div>
+						))}
+					</CardContent>
+				</Card>
+
 				{/* 审批 */}
 				{projectApprovals.length > 0 && (
 					<Card>
@@ -239,66 +333,33 @@ export function ProjectDetailPage() {
 							<CardTitle className="text-base">待我审批</CardTitle>
 						</CardHeader>
 						<CardContent className="space-y-2">
-							{projectApprovals.map((a) => {
-								const run = (runs.data ?? []).find((r) => r.id === a.stage_run_id);
-								return (
-									<div
-										key={a.id}
-										className="flex items-center justify-between rounded-lg border px-3 py-2 text-sm"
-									>
-										<span>
-											{STAGE_LABELS[a.stage] ?? a.stage} · 运行 #{a.stage_run_id}
-											{run && ` · 第 ${run.round} 轮`} 待审产物
-										</span>
-										<div className="flex gap-2">
-											<Button size="sm" variant="outline" onClick={() => setDecideTask(a.id)}>
-												审批
-											</Button>
-										</div>
+							{projectApprovals.map((a) => (
+								<div
+									key={a.id}
+									className="flex items-center justify-between rounded-lg border px-3 py-2 text-sm"
+								>
+									<span>
+										{STAGE_LABELS[a.stage] ?? a.stage} · 第 {a.run_round} 轮 · 运行 #
+										{a.stage_run_id} 待审产物
+									</span>
+									<div className="flex gap-2">
+										<Button size="sm" variant="outline" onClick={() => setDecideTask(a)}>
+											审批
+										</Button>
 									</div>
-								);
-							})}
+								</div>
+							))}
 						</CardContent>
 					</Card>
 				)}
 			</div>
 
-			{/* 审批对话框 */}
-			<Dialog open={decideTask !== null} onOpenChange={(open) => !open && setDecideTask(null)}>
-				<DialogContent>
-					<DialogHeader>
-						<DialogTitle>审批决定</DialogTitle>
-						<DialogDescription>
-							退回必须填写意见，发起人将看到意见并重新开启该阶段（轮次 +1）。
-						</DialogDescription>
-					</DialogHeader>
-					<Textarea
-						placeholder="审批意见（退回时必填）"
-						value={comment}
-						onChange={(e) => setComment(e.target.value)}
-					/>
-					<DialogFooter>
-						<DialogClose asChild>
-							<Button variant="outline">取消</Button>
-						</DialogClose>
-						<Button
-							variant="destructive"
-							disabled={decide.isPending || !comment.trim()}
-							onClick={() => decideTask && decide.mutate({ task: decideTask, action: 'return', text: comment })}
-						>
-							{decide.isPending && decide.variables?.action === 'return' && <Loader2 className="animate-spin" />}
-							退回
-						</Button>
-						<Button
-							disabled={decide.isPending}
-							onClick={() => decideTask && decide.mutate({ task: decideTask, action: 'approve', text: comment || undefined })}
-						>
-							{decide.isPending && decide.variables?.action === 'approve' && <Loader2 className="animate-spin" />}
-							通过
-						</Button>
-					</DialogFooter>
-				</DialogContent>
-			</Dialog>
+			{/* 审批对话框：预览待审产物后通过/退回（与审批中心共用） */}
+			<ApprovalDecideDialog
+				task={decideTask}
+				onOpenChange={(open) => !open && setDecideTask(null)}
+				onDecided={invalidate}
+			/>
 		</div>
 	);
 }

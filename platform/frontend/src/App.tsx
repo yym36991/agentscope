@@ -6,6 +6,7 @@ import { RouteError } from '@/components/error/RouteError';
 import { PlatformLayout } from '@/components/layout/PlatformLayout';
 import { queryClient } from '@/lib/query-client';
 import { AuthProvider, useAuth } from '@/auth';
+import { ApprovalsPage } from '@/pages/Approvals';
 import { LoginPage } from '@/pages/Login';
 import { ProjectDetailPage } from '@/pages/ProjectDetail';
 import { ProjectsPage } from '@/pages/Projects';
@@ -32,6 +33,7 @@ const router = createBrowserRouter([
 		children: [
 			{ index: true, element: <Navigate to="/projects" replace /> },
 			{ path: '/projects', element: <ProjectsPage /> },
+			{ path: '/approvals', element: <ApprovalsPage /> },
 			{
 				path: '/projects/:projectId',
 				errorElement: <RouteError />,

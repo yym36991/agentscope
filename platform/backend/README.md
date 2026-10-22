@@ -57,6 +57,8 @@ API 文档：http://localhost:8100/docs
 - [x] runtime_client 防腐层 + 阶段会话生命周期
       （启动阶段即建会话；运行时不可用时降级为懒创建，对话中自愈）
 - [x] 需求生成智能体接入（scripts/seed.py 种到 sys:runtime 名下）
+- [x] 角色分工：项目负责人视图 + 审批中心（审批人收件箱，产物预览审批；
+      成员管理端点，APPROVER 角色按 D8 解析审批收件人）
 
 ## 一次性引导
 
@@ -87,6 +89,9 @@ GET  /projects                 我的项目列表
 GET  /projects/{id}            项目详情
 POST /projects/{id}/stages/{stage}/start   开阶段运行（顺序+去重守卫）
 GET  /projects/{id}/stage-runs 运行历史
+GET  /projects/{id}/members    成员列表（项目成员可见）
+POST /projects/{id}/members    加成员（仅负责人；用户名+角色，审批人/项目经理/成员/观察者）
+DELETE /projects/{id}/members/{uid}  移除成员（仅负责人）
 POST /stage-runs/{id}/chat     对话（转发到运行时会话，模型配置自愈）
 GET  /stage-runs/{id}/messages 会话消息（前端轮询用）
 POST /stage-runs/{id}/confirm  工具确认（HITL：允许/拒绝 asking 调用）
@@ -94,6 +99,6 @@ POST /stage-runs/{id}/submit   提交产物（落盘 artifacts/，进入待审�
 POST /stage-runs/{id}/submit-latest   把智能体最新回答提交为产物
 GET  /stage-runs/{id}/artifacts       产物版本列表
 GET  /stage-runs/{id}/artifacts/{aid} 产物内容（预览）
-GET  /approvals/pending        我的待审批
+GET  /approvals/pending        我的待审批（含项目名/轮次，供审批中心收件箱）
 POST /approvals/{id}/decide    审批（approve | return+意见）
 ```

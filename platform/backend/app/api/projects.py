@@ -7,7 +7,7 @@ app/services/flow.py (single implementation, §5).
 import base64
 import io
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
@@ -166,10 +166,31 @@ class ApprovalOut(BaseModel):
     id: int
     stage_run_id: int
     project_id: int
+    project_name: str
     stage: StageKey
+    run_round: int
     run_status: StageRunStatus
     status: ApprovalStatus
     comment: str | None
+
+
+class MemberOut(BaseModel):
+    """A membership row joined with the user's name fields."""
+
+    id: int
+    user_id: int
+    username: str
+    display_name: str
+    role: ProjectRole
+    created_at: str
+
+
+class MemberAddIn(BaseModel):
+    """Owner-only: add a member by username. INITIATOR is reserved for
+    the owner (auto-created with the project), so it's not choosable."""
+
+    username: str = Field(min_length=2, max_length=64)
+    role: Literal["manager", "member", "approver", "observer"]
 
 
 # ---------- helpers ----------
@@ -258,6 +279,125 @@ async def get_project(
 ) -> ProjectOut:
     project = await _get_project_or_404(db, project_id, user)
     return ProjectOut.from_project(project)
+
+
+# ---------- project members ----------
+# Approval addressees resolve at submit time (flow.resolve_approver,
+# Decision D8): a member added as APPROVER receives every task submitted
+# afterwards; tasks already addressed keep their original approver.
+
+
+@router.get(
+    "/projects/{project_id}/members", response_model=list[MemberOut]
+)
+async def list_members(
+    project_id: int,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[MemberOut]:
+    await _get_project_or_404(db, project_id, user)
+    rows = (
+        await db.execute(
+            select(ProjectMember, User)
+            .join(User, ProjectMember.user_id == User.id)
+            .where(ProjectMember.project_id == project_id)
+            .order_by(ProjectMember.id)
+        )
+    ).all()
+    return [
+        MemberOut(
+            id=member.id,
+            user_id=u.id,
+            username=u.username,
+            display_name=u.display_name,
+            role=member.role,
+            created_at=member.created_at.isoformat(),
+        )
+        for member, u in rows
+    ]
+
+
+@router.post(
+    "/projects/{project_id}/members", response_model=MemberOut, status_code=201
+)
+async def add_member(
+    project_id: int,
+    payload: MemberAddIn,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> MemberOut:
+    project = await _get_project_or_404(db, project_id, user)
+    if project.owner_user_id != user.id:
+        raise HTTPException(
+            status_code=403, detail="only the project owner can manage members"
+        )
+    target = await db.scalar(
+        select(User).where(User.username == payload.username)
+    )
+    if target is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"user '{payload.username}' not found — they need to "
+            f"register first",
+        )
+    if target.id == project.owner_user_id:
+        raise HTTPException(
+            status_code=409, detail="owner is already the project initiator"
+        )
+    exists = await db.scalar(
+        select(ProjectMember).where(
+            ProjectMember.project_id == project_id,
+            ProjectMember.user_id == target.id,
+        )
+    )
+    if exists is not None:
+        raise HTTPException(status_code=409, detail="already a member")
+    member = ProjectMember(
+        project_id=project_id,
+        user_id=target.id,
+        role=ProjectRole(payload.role),
+    )
+    db.add(member)
+    await db.commit()
+    await db.refresh(member)
+    return MemberOut(
+        id=member.id,
+        user_id=target.id,
+        username=target.username,
+        display_name=target.display_name,
+        role=member.role,
+        created_at=member.created_at.isoformat(),
+    )
+
+
+@router.delete(
+    "/projects/{project_id}/members/{user_id}", status_code=204
+)
+async def remove_member(
+    project_id: int,
+    user_id: int,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    project = await _get_project_or_404(db, project_id, user)
+    if project.owner_user_id != user.id:
+        raise HTTPException(
+            status_code=403, detail="only the project owner can manage members"
+        )
+    if user_id == project.owner_user_id:
+        raise HTTPException(
+            status_code=409, detail="cannot remove the owner's initiator row"
+        )
+    member = await db.scalar(
+        select(ProjectMember).where(
+            ProjectMember.project_id == project_id,
+            ProjectMember.user_id == user_id,
+        )
+    )
+    if member is None:
+        raise HTTPException(status_code=404, detail="member not found")
+    await db.delete(member)
+    await db.commit()
 
 
 # ---------- stage runs ----------
@@ -1087,12 +1227,24 @@ async def pending_approvals(
             .order_by(ApprovalTask.id)
         )
     ).all()
+    # 审批中心是跨项目的收件箱：把项目名一并带出，免得前端再逐个查
+    project_names = dict(
+        (
+            await db.execute(
+                select(Project.id, Project.name).where(
+                    Project.id.in_({t.stage_run.project_id for t in tasks})
+                )
+            )
+        ).all()
+    )
     return [
         ApprovalOut(
             id=t.id,
             stage_run_id=t.stage_run_id,
             project_id=t.stage_run.project_id,
+            project_name=project_names[t.stage_run.project_id],
             stage=t.stage_run.stage,
+            run_round=t.stage_run.round,
             run_status=t.stage_run.status,
             status=t.status,
             comment=t.comment,

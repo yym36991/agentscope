@@ -115,11 +115,30 @@ export interface ApprovalOut {
 	id: number;
 	stage_run_id: number;
 	project_id: number;
+	project_name: string;
 	stage: string;
+	run_round: number;
 	run_status: string;
 	status: string;
 	comment: string | null;
 }
+
+export interface MemberOut {
+	id: number;
+	user_id: number;
+	username: string;
+	display_name: string;
+	role: string;
+	created_at: string;
+}
+
+export const ROLE_LABELS: Record<string, string> = {
+	initiator: '发起人',
+	manager: '项目经理',
+	member: '成员',
+	approver: '审批人',
+	observer: '观察者',
+};
 
 export interface MessagesOut {
 	messages: Msg[];
@@ -212,6 +231,14 @@ export const api = {
 			'POST',
 			{ action, comment },
 		),
+
+	// ---------- project members ----------
+	listMembers: (projectId: number) =>
+		request<MemberOut[]>(`/projects/${projectId}/members`),
+	addMember: (projectId: number, username: string, role: string) =>
+		request<MemberOut>(`/projects/${projectId}/members`, 'POST', { username, role }),
+	removeMember: (projectId: number, userId: number) =>
+		request<void>(`/projects/${projectId}/members/${userId}`, 'DELETE'),
 };
 
 /** Asking tool calls of a message, for the HITL confirm bar. */
