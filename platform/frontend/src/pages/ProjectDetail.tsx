@@ -112,6 +112,12 @@ export function ProjectDetailPage() {
 		(r) => r.stage === p.current_stage && r.status === 'in_progress',
 	);
 
+	// 只读回看：某阶段最新一轮已通过的 run（时间线「查看」入口的跳转目标）
+	const latestApprovedRun = (stage: string) =>
+		(runs.data ?? [])
+			.filter((r) => r.stage === stage && r.status === 'approved')
+			.sort((a, b) => b.round - a.round)[0];
+
 	return (
 		<div className="h-full overflow-auto p-6">
 			<div className="mx-auto max-w-4xl space-y-5">
@@ -150,6 +156,16 @@ export function ProjectDetailPage() {
 										)}
 										<span className="font-medium">{STAGE_LABELS[stage]}</span>
 										{state === 'approved' && <span className="text-green-600">已通过</span>}
+										{state === 'approved' && latestApprovedRun(stage) && (
+											<Button size="sm" variant="ghost" className="h-6 px-2 text-xs" asChild>
+												<Link
+													to={`/projects/${pid}/workbench/${latestApprovedRun(stage)!.id}`}
+													title="只读回看本阶段已通过轮次的对话与产物"
+												>
+													查看
+												</Link>
+											</Button>
+										)}
 										{state === 'in_progress' && <span className="text-blue-600">进行中</span>}
 										{state === 'under_review' && <span className="text-amber-600">待审批</span>}
 										{state === 'available' && (
@@ -202,11 +218,14 @@ export function ProjectDetailPage() {
 									<Badge variant={r.status === 'approved' ? 'default' : 'secondary'}>
 										{RUN_STATUS[r.status] ?? r.status}
 									</Badge>
-									{r.status === 'in_progress' && (
-										<Button size="sm" variant="ghost" asChild>
-											<Link to={`/projects/${pid}/workbench/${r.id}`}>工作台</Link>
-										</Button>
-									)}
+									<Button size="sm" variant="ghost" asChild>
+										<Link
+											to={`/projects/${pid}/workbench/${r.id}`}
+											title={r.status === 'in_progress' ? undefined : '只读回看当时的完整对话与产物'}
+										>
+											{r.status === 'in_progress' ? '工作台' : '查看'}
+										</Link>
+									</Button>
 								</div>
 							</div>
 						))}

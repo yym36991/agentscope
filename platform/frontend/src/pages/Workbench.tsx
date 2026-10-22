@@ -340,7 +340,16 @@ export function WorkbenchPage() {
 						</div>
 					)}
 
+					{/* 只读横幅：非进行中的阶段可回看全记录，但不可再对话 */}
+					{!inProgress && (
+						<div className="border-t bg-muted/40 px-4 py-3 text-xs text-muted-foreground">
+							本阶段{RUN_STATUS[currentRun.status] ?? currentRun.status}，工作台为只读模式：
+							可回看完整对话与产物，不可发送新消息。
+						</div>
+					)}
+
 					{/* 输入区 */}
+					{inProgress && (
 					<div className="border-t p-3">
 						<form
 							onSubmit={(e) => {
@@ -431,6 +440,7 @@ export function WorkbenchPage() {
 							</Button>
 						</form>
 					</div>
+					)}
 				</div>
 			</ResizablePanel>
 
