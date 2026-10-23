@@ -443,7 +443,7 @@ curl -sS -X POST "$BASE/agent/" -H "Content-Type: application/json" -H "X-User-I
                  MinIO/S3：知识库文档原文 + 产物归档
 ```
 
-（图取自 `platform-design/architecture.md` §2。图中缩写：SPA = Single-Page Application 单页应用；JWT = JSON Web Token 令牌；BFF = Backend for Frontend 面向前端的后端聚合层；RBAC = Role-Based Access Control 基于角色的访问控制。）
+（图取自 `platform-design/architecture.md` §2。图中缩写：SPA = Single-Page Application 单页应用；JWT = JSON Web Token 令牌；BFF = Backend for Frontend 面向前端的后端聚合层；RBAC = Role-Based Access Control 基于角色的访问控制；L1 = Layer 1，业务编排层的代号——四层中唯一编号的层。）
 
 **三条铁律**（所有设计从这三条推导）：
 
