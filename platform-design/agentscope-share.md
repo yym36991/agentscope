@@ -2,69 +2,67 @@
 
 > **文档结构与范围**
 > - **第一部分**：开源智能体框架横向对比——调研目的是为《软件造价评估平台》选型；
-> - **第二部分**：AgentScope 框架能力，行文跟随官方文档（2.0.9 中文版）：先 SDK（Software Development Kit，软件开发工具包）核心组件，后 Agent Service 服务层；
+> - **第二部分**：AgentScope 框架能力，行文跟随官方文档（2.0.10 中文版）：先 SDK 核心组件，后 Agent Service 服务层；
 > - **第三部分**：依托 AgentScope 做的软件造价评估平台（自研运行时入口在 `examples/platform_agent_service`），改了哪里、为了支持什么。
-> - 只讲 SDK / HTTP（HyperText Transfer Protocol，超文本传输协议）API（Application Programming Interface，应用程序编程接口）两种用法；Star 数与版本号均为 2026-10-21 查询值。
+> - 只讲 SDK / HTTP API 两种用法；Star 数与版本号均为 2026-10-21 查询值。
 
 ## 三个要点
 
 1. **选型结论**：AgentScope 是六个候选中唯一同时满足「SDK 可嵌入 + 多租户服务层 + Apache-2.0 协议 + MCP 内建」的框架——其余候选要么是单人应用、要么是低代码平台、要么未过稳定期。
 2. **框架结构**：两层，智能都在下层——SDK 层（无状态 Agent + 工具箱 + 会话状态）负责智能，Agent Service 层包一层多租户 HTTP 服务；两层可独立使用。
-3. **平台实践**：运行时保持官方形态不动，只改组装三件套（存储 / 消息总线 / 下载签名密钥）；鉴权、流程审批、产物版本全部外置到自研编排层——**平台能力不靠改框架，靠「独立目录 + 组装参数 + 外置控制面」**。
+3. **平台实践**：运行时保持官方形态不动，只改组装三件套（存储 / 消息总线 / 下载签名密钥）；鉴权、流程审批、产物版本全部外置到自研编排层——**平台能力不靠改框架，靠「独立目录 + 组装参数 + 自研业务编排、前端」**。
 
 ---
 
 # 第一部分 开源框架横向对比
 
-## 1.1 选型标尺：五项硬需求
+## 1.1 选型：五项硬需求
 
 平台目标：**6 个智能体覆盖软件造价评估全生命周期**（需求澄清 → PRD（Product Requirements Document，需求规格说明书）→ 原型 → 工时预算 → 测试 → 验收审计），**产物必须人工审批**，**多用户多角色**（项目经理 / 审批人 / 需求提出者），三层架构（自研编排层 + 智能体运行时 + 前端）——运行时必须可嵌入，不能反过来吞掉编排层。
 
 | # | 硬需求 | 含义 |
 |---|---|---|
 | 1 | 多智能体编排 | 6 个智能体按阶段串行协作，可扩展 |
-| 2 | 人工审批（HITL，Human-in-the-Loop，人在回路） | 产物送审 + 工具调用确认，长周期可审计 |
-| 3 | 自定义 HTTP 服务 | 接口、鉴权、SSE（Server-Sent Events，服务器单向事件流推送）自己定，前端自己写 |
+| 2 | 人工审批（HITL，人在回路） | 产物送审 + 工具调用确认，长周期可审计 |
+| 3 | 自定义 HTTP 服务 | 接口、鉴权、SSE（服务器单向事件流推送）自己定，前端自己写 |
 | 4 | 多用户隔离 | 用户 / 会话 / 并发三层隔离 |
-| 5 | MCP（Model Context Protocol，模型上下文协议——开放工具接入标准）生态 | 工具接入走开放标准 |
+| 5 | MCP（模型上下文协议——开放工具接入标准）生态 | 工具接入走开放标准 |
 
 ## 1.2 六个框架速览
 
 ### LangGraph（LangChain）——编排库的标杆
 
-- Python + TypeScript 双栈纯库；MIT 协议；1.0 于 2025-10 稳定。三种形态：`pip install` 纯库、`langgraph dev` 开发服务器、LangSmith 商业托管。
-- 核心抽象**状态图**：节点 + 条件边 + 显式 State schema，每个 superstep 后状态 reduce 并持久化到 Checkpointer；`interrupt()` + `Command` 恢复，HITL 是一等原语，同类最成熟。
-- 生态分层：LangChain（框架）→ LangGraph（编排运行时）→ Deep Agents（上层 harness）→ LangSmith（平台）。
+- Python + TypeScript 双栈。
+- 核心抽象**状态图**：节点 + 条件边，每个 superstep 后状态持久化到 Checkpointer；`interrupt()` + `Command` 恢复，HITL 是一等原语，同类最成熟。
+- 生态分层：LangChain（框架）→ LangGraph（编排运行时）→ Deep Agents（上层 harness）→ LangSmith（监控平台）。
 - **匹配度：中高**——只选「编排库」时的最强替代；但多租户、会话管理、SSE、凭证管理全部要自建或购买。
 
-### DeerFlow（字节跳动）——事件驱动的通用智能体应用
+### DeerFlow（字节）——事件驱动的通用智能体应用
 
-- Python 后端 + Next.js 前端的单体应用（命令行 CLI（Command-Line Interface，命令行界面）+ Web UI）；MIT；v2.0（2026-06）彻底重写、摆脱 LangGraph 依赖。
-- 核心是**事件驱动运行时**：Agent / Tool / MCP / HITL 都是一等原语，搭智能体 = 组合原语（composition-driven，组合驱动）；出厂自带 plan-and-execute 规划器。
-- **对我们的价值：作参考而非底座**——v2 重写的头号动机是「链式流程装不下常态化的 HITL」，与我们「审批放状态机、工具确认放对话内挂起」的取舍同源；但形态仍是单人应用，无多租户 / 鉴权 / 会话隔离概念。
+- Python + Next.js。
+- 定位是「超级智能体底座」，擅长长时域、探索型任务：深度研究、报告生成、代码编写、幻灯片制作。核心卖点是单主智能体（Lead Agent）动态派生子智能体并行工作，配合 Docker 沙箱执行、渐进式技能加载和多种 channel IM 接入。**单个更聪明的智能体，而不是多个**——它只是一个 ReAct 循环，只有一张图。
 
 ### DeepSeek Harness（DeepSeek AI）——一切皆插件
 
-- TypeScript；桌面 / Web / CLI + SDK；MIT；0.2.x，官方标注 Developer Preview（承诺破坏性变更）；2026-08 开源，25 万+ star。
+- TypeScript。
 - 底层 Cordis 插件框架，连 agent loop 本身都是插件；**会话是 append-only 事件流**（事件溯源风格），fork / 恢复 / transcript / 审计全部从事件派生。
-- **对我们的价值：理念借鉴**——事件溯源式会话对审计留痕（银行刚需）有直接启发；preview 状态 + TypeScript 栈不适合作底座。
+- **对我们的价值：理念借鉴**——事件溯源式会话对审计留痕（银行刚需）有直接启发；TypeScript 栈不适合作底座。
 
 ### Dify（LangGenius）——可视化低代码平台
 
-- Python + TypeScript 可视化平台，Docker 自托管或云服务；画布拖拽编排工作流，配 RAG（Retrieval-Augmented Generation，检索增强生成）管道与插件市场。
+- Python + TypeScript 可视化平台，Docker 自托管或云服务；画布拖拽编排工作流。
 - **两条硬伤直接出局**：① 开源协议是 Dify Open Source License（Apache 2.0 附加条款：未经书面授权不得用源码运营多租户环境）——多用户平台需法务确认甚至商业授权；② **它自己就是编排层**，与自研编排层定位直接冲突。
 
 ### OpenCode（Anomaly）——终端编程智能体
 
-- TypeScript；CLI / TUI（Terminal User Interface，终端界面）+ 桌面 + IDE（Integrated Development Environment，集成开发环境）扩展；MIT；C/S（Client/Server，客户端-服务器）架构，定位「开源版 Claude Code」。
-- `opencode serve` 起 headless HTTP 服务器并暴露 **OpenAPI 3.1 规范**，SDK 由规范自动生成；内置 build（全权）/ plan（只读）两个 agent，permissions 与 policies 分层。
+- TypeScript；定位「开源版 Claude Code」。
 - **对我们的价值**：OpenAPI 驱动 SDK 的接口治理、只读 agent 的权限分级（「审查智能体只读化」直接可借鉴）；单用户工具形态不宜作底座。
 
-### AgentScope（阿里通义实验室）——我们的选择
+### AgentScope（阿里）——我们的选择
 
 - Python ≥ 3.11；**Apache-2.0**（商用最友好，无附加条款）；**双层形态**：SDK 库（嵌入自己的服务）+ Agent Service（`create_app` 一键起多租户 FastAPI 服务，配官方 Web UI）。
-- 设计哲学「为不断增强的模型能力设计」（design for increasingly agentic LLM（Large Language Model，大语言模型））——不预设固定编排去框住模型，依赖模型的推理和工具使用能力；多租户、多会话、分布式部署是一等公民。
-- 风险：无官方 JavaScript SDK；迭代快（5 个月 2.0.0 → 2.0.10）；分布式部署标注 WIP（Work in Progress，开发中）。
+- 设计哲学「为不断增强的模型能力设计」——不预设固定编排去框住模型，依赖模型的推理和工具使用能力；多租户、多会话、分布式部署是一等公民。
+- 风险：无官方 JS SDK；迭代快（5 个月 2.0.0 → 2.0.10）；分布式部署开发中。
 
 ## 1.3 横向对比总表
 
@@ -93,21 +91,69 @@
 
 六个框架其实是**四个物种**：编排库、应用（DeerFlow / OpenCode）、低代码平台、插件化运行时（DeepSeek Harness）。**选型错位比功能差距更致命**——用应用或平台做底座，最终都会和自研层打架。
 
-- **LangGraph**：只选「编排库」时的最强替代（大概率路线是 LangGraph + 自写服务层），但服务层要全部自己长出来；
+- **LangGraph**：只选「编排库」时的最强（LangGraph + 自写服务层），但服务层要全部自己写；
 - **Dify**：许可证 + 架构冲突，出局；
 - **DeerFlow / OpenCode / DeepSeek Harness**：不作底座，各吸收一点——DeerFlow 验证了「HITL 是常态而非异常」、OpenCode 的 OpenAPI 接口治理与只读分级、DeepSeek Harness 的事件溯源审计；
-- **AgentScope**：五项需求全绿的唯一候选；代价（Python-only、月度迭代、分布式 WIP）在第三部分用防腐层（Anti-Corruption Layer，见 §3.5）对冲。
+- **AgentScope**：五项需求全绿的唯一候选；代价（Python-only、月度迭代）在第三部分用适配层对冲。
 
 ---
 
 # 第二部分 AgentScope 框架能力
 
-> 官方文档（2.0.9 中文版，https://docs.agentscope.io/zh/versions/2.0.9）的行文顺序就是本部分的顺序：核心模块（SDK 层）→ 智能体即服务（Service 层）→ API。
+> 行文跟随官方文档（2.0.10 中文版，https://docs.agentscope.io/zh/versions/2.0.10）的逻辑：**核心模块（SDK 层）→ 智能体即服务（Service 层）→ API**。能力细节均已对照本仓库 AgentScope 源码（2.0.11dev）核实。
 
-## 2.0 两层结构
+```
+官方文档目录（主干）
+├─ 快速开始
+├─ 核心模块（SDK 层）
+│   ├─ 消息与事件 ｜ 中间件 ｜ RAG ｜ 长期记忆
+│   ├─ 智能体：概述 ｜ 配置 ｜ 运行 ｜ 中断 ｜ 人机交互
+│   ├─ 模型：大语言模型 ｜ 语音合成 ｜ 嵌入模型
+│   ├─ 上下文管理：概述 ｜ 感知环境 ｜ 压缩 ｜ 卸载
+│   ├─ 工具：概述 ｜ Python 函数 ｜ MCP ｜ Skill ｜ 元工具
+│   ├─ 流水线：目标流水线 ｜ 团队流水线
+│   ├─ 权限系统：概述 ｜ 权限模式 ｜ 权限规则 ｜ 内置检查
+│   └─ 工作区：概述 ｜ 运行 ｜ 管理资源 ｜ MCP 网关
+├─ 智能体即服务（Service 层）
+│   ├─ 架构 ｜ 智能体团队 ｜ SOP ｜ 资源共享 ｜ RAG 服务 ｜ 工作区管理
+│   ├─ MCP 与技能中心（Hub）
+│   └─ 消息渠道：飞书 ｜ 钉钉 ｜ Discord ｜ 自定义
+└─ API 参考
+```
+
+## 2.0 两层结构与快速开始
 
 - **SDK 层**：`Agent` 是无状态的 ReAct（Reasoning + Acting，推理-行动）循环，配模型、工具箱（Python 函数 / MCP / Skill）、消息和事件。`import agentscope` 组装，用的就是这一层。
 - **Agent Service 层**（`create_app`）：SDK 外面包一层 HTTP 服务——多租户、工作区、凭证、Hub、调度。官方入口 `examples/agent_service/main.py`。
+
+安装与最小示例：
+
+```bash
+pip install agentscope        # 或 agentscope[full]（全部可选依赖）
+# Python ≥ 3.11；默认 MCP 需 Node ≥ 20 的 npx
+```
+
+```python
+from agentscope.agent import Agent
+from agentscope.credential import OpenAICredential
+from agentscope.message import UserMsg
+from agentscope.model import OpenAIChatModel
+from agentscope.tool import Toolkit
+
+model = OpenAIChatModel(
+    credential=OpenAICredential(api_key="...", base_url="..."),  # 任意 OpenAI 兼容端点
+    model="glm-5.3",
+    stream=True,
+)
+agent = Agent(
+    name="demo",
+    system_prompt="你是一个简洁的中文助手。",
+    model=model,
+    toolkit=Toolkit(),                      # 空工具箱也能跑
+)
+reply = agent.reply(UserMsg("用一句话介绍你自己"))    # 同步，返回完整结果
+# 流式：async for event in agent.reply_stream(UserMsg(...))
+```
 
 **已验证能力速览**（两种接法通用）：
 
@@ -115,19 +161,19 @@
 |---|---|---|
 | 流式对话 | ✅ 发消息、收结果是**两个接口** | `POST /chat` 立即返回 `started`；回复从 `GET /sessions/{id}/stream` 订阅 |
 | 多轮记忆 | ✅ | `AgentState` 按 session 持久化，续聊自动恢复；超窗口自动压缩 |
-| 超时/重试 | 模型类内默认**重试 3 次、间隔 1 秒** | SDK 侧可改，API 无对应参数 |
+| 超时/重试 | 模型类内默认**重试 3 次、间隔 1 秒** | SDK 侧可改（`model_config`），API 无对应参数 |
 | 主备模型 | ✅ 每条 session 最多两个模型 | fallback 可指向不同厂商的凭证 |
-| 工具调用 | ✅ MCP、Skill | 都支持「直接挂载」和「Hub 安装」两条路（§2.4） |
+| 工具调用 | ✅ MCP、Skill | 都支持「直接挂载」和「Hub 安装」两条路（§2.2.3） |
 | 用户隔离 | ✅ 跨用户访问别人的 session / agent → 404 | |
 | 会话隔离 | ✅ 同用户多 session 互不知晓 | |
 | 并发 | ✅ 多用户同时对话不串数据 | 同一 session 并发触发 → 409 |
-| 集群部署 | ✅ 需 Redis 版 MessageBus（§2.6） | |
+| 集群部署 | ✅ 需 Redis 版 MessageBus（§2.2.6） | |
 
-## 2.1 SDK 核心模块
+## 2.1 核心模块（SDK 层）
 
 ### 2.1.1 消息与事件
 
-**消息（Msg / ContentBlock）负责上下文与存储**——存数据库的、喂给大模型的就是它。一条 `Msg` 的 `content` 是一组内容块：
+**消息（Msg / ContentBlock）负责上下文与存储**——存数据库的、喂给大模型。一条 `Msg` 的 `content` 是一组内容块：
 
 | 块类型 | 存什么 |
 |---|---|
@@ -137,7 +183,7 @@
 | `TextBlock` | 最终输出给用户的正文 |
 | `DataBlock` | 图片、文件等多模态数据 |
 
-工程意义：正文、工具调用、工具返回值结构化分开，后端组装 Prompt、前端渲染都按块取，不用从散文里切。
+工程意义：正文、工具调用、工具返回值结构化分开，后端组装 Prompt、前端渲染都按块取，不用自己找着切。
 
 **事件（Event）负责流式输出**——`reply_stream()` 吐出连续事件（`ModelCallStartEvent` 思考中、`TextBlockDeltaEvent` 打字机、`ToolCallStartEvent` 工具标签），前端按事件类型渲染不同 UI 组件。
 
@@ -145,16 +191,37 @@
 
 Agent 是纯粹的「消息处理节点」：输入消息 → 推理 + 工具调用 → 输出消息，**自己不存记忆**——正因如此，才能在每次请求时把数据库里的 `AgentState` 注入给它，实现多节点并发部署。
 
-- 所有 Agent 用同一个 `Agent` 类，差别只在构造时注入的系统提示词和工具箱；**隔离是构造出来的**（挂空 Toolkit 就调不到任何工具）。
-- 核心 API 两个：`reply()` 同步返回完整结果；`reply_stream()` 流式广播事件。`POST /sessions/{id}/interrupt` 可从外部打断运行中的回复。
+所有 Agent 用同一个 `Agent` 类，差别全在构造参数（源码签名）：
+
+```python
+Agent(
+    name, system_prompt, model,
+    toolkit=None,          # 工具 / MCP / Skill 的唯一登记处
+    middlewares=None,      # 行为扩展挂点（§2.1.9）
+    state=None,            # 注入的 AgentState（记忆）
+    offloader=None,        # 上下文卸载器（§2.1.4）
+    model_config=None,     # fallback 模型与重试
+    context_config=None,   # 上下文压缩配置
+    react_config=None,     # 推理-行动循环（如 max_iters）
+    injection_config=None, # 动态注入（时间等运行态 HINT 块）
+)
+```
+
+- **隔离是构造出来的**：挂空 Toolkit 就调不到任何工具，专家智能体不靠运行时拦截。
+- 核心 API 两个：`reply()` 同步返回完整结果；`reply_stream()` 流式广播事件。运行中可 `POST /sessions/{id}/interrupt` 外部打断。
+- 模块另提供 A2A（Agent-to-Agent 协议）智能体与实时语音智能体。
 
 ### 2.1.3 模型：厂商解耦
 
-基类 `ChatModelBase` 统一成「给消息、收 ChatResponse、流式增量」，Agent 只依赖基类；换厂商只换子类（OpenAI / Anthropic / Gemini / DashScope / DeepSeek / Ollama 等），**Agent 一层不用动**。默认重试 3 次、间隔 1 秒；session 级可配主模型 + fallback。
+基类 `ChatModelBase` 统一成「给消息、收 ChatResponse、流式增量」，Agent 只依赖基类；换厂商只换子类，**Agent 一层不用动**。官方适配器（源码目录）：OpenAI（Chat Completions 与 Responses 两种）、Anthropic、Gemini、DashScope、DeepSeek、Moonshot、MiniMax、Ollama 等。
+
+- 每个模型配「模型卡」（`_model_card/`：上下文窗口、最大输出等元数据），供上下文压缩预估 token。
+- 语音与多模态：`asr`（语音识别）/ `tts`（语音合成）/ `embedding`（嵌入）/ `realtime`（实时语音）独立模块。
+- 默认重试 3 次、间隔 1 秒；`model_config` 可配 fallback 模型（跨厂商凭证）。
 
 ### 2.1.4 上下文管理：记忆工程
 
-大模型绝对无状态，「记忆」都是 Agent 层的工程：静态配置（系统提示词、工具定义）绑定实例；动态记忆（问答、工具结果）托管于 `AgentState` 持久化。每次调模型前组装两路输入——`messages`（系统提示词 → 摘要 → 历史上下文）和 `tools`（Toolkit 生成的 JSON（JavaScript Object Notation，数据交换格式）Schema），不是拼一段大字符串。
+大模型无状态，「记忆」都是 Agent 层的工程：静态配置（系统提示词、工具定义）绑定实例；动态记忆（问、答、工具结果）托管于 `AgentState` 持久化。每次调模型前组装两路输入——`messages`（系统提示词 → 摘要 → 历史上下文）和 `tools`（Toolkit 生成的函数名、参数说明），不是拼一段大字符串。
 
 **压缩**（默认 `ContextConfig`）：每次发给模型前预估 token——
 
@@ -164,7 +231,9 @@ threshold        = trigger_ratio（默认 0.8）× 模型最大窗口
 保留额度          = reserve_ratio（默认 0.1）× 窗口   ← 超阈值触发压缩
 ```
 
-从最新消息向老消息回溯保留近期原文，更旧的调模型提炼进 summary；分割线上的消息可**按 Block 精细截断**。**卸载（offload）**：被压缩的原文可整段写入工作区磁盘，摘要末尾留路径，模型可用读文件工具捞回原文。
+从最新消息向老消息回溯保留近期原文，更旧的调模型提炼进 summary；分割线上的消息可按 Block 精细截断。
+
+**卸载（offload）**：被压缩的原文可整段写入工作区磁盘（构造参数 `offloader`），摘要末尾留路径，模型可用读文件工具捞回原文——压缩不丢信息。
 
 ### 2.1.5 工具：三种挂法
 
@@ -172,12 +241,15 @@ threshold        = trigger_ratio（默认 0.8）× 模型最大窗口
 2. **MCP**：`MCPClient` 登记进 `Toolkit(mcps=[...])`，命名空间 `mcp__{server}__{tool}`；有状态（stdio，标准输入输出）与无状态（HTTP）两种客户端；
 3. **Skill**：不执行业务代码，是一份 SKILL.md 说明书，模型读全文后按要求输出。
 
-另有元工具（内置 Bash / Grep / Read / Write / Edit 等）与沙箱工作区内的 MCP 网关。
+另有元工具（内置 Bash / Grep / Read / Write / Edit 等）与沙箱工作区内的 MCP 网关（§2.1.8）。
 
-### 2.1.6 流水线、权限与工作区（速览）
+### 2.1.6 流水线：SDK 侧的多智能体
 
-- **流水线**：GoalPipeline（目标导向 leader-worker）/ TeamPipeline（团队协作）；SDK 侧最轻的协同惯用法是把「调另一个 Agent」包成 FunctionTool 挂到 Leader 工具箱（§2.2 决策 3）。
-- **权限模式五档**：
+官方提供两种现成流水线：**GoalPipeline**（目标导向 leader-worker，Leader 拆解目标、分派、汇总）与 **TeamPipeline**（团队协作）。更复杂的协同在 SDK 侧的惯用法是把「调另一个 Agent」包成 `FunctionTool` 挂到 Leader 工具箱——点到工具名之后是普通 Python 在跑，这是最轻的协同方式。
+
+### 2.1.7 权限系统与人机交互（HITL）
+
+**权限模式五档**：
 
 | 模式 | 设计意图 | 场景 |
 |---|---|---|
@@ -187,86 +259,32 @@ threshold        = trigger_ratio（默认 0.8）× 模型最大窗口
 | `BYPASS` | 信任环境全放行 | 隔离容器 / VM（风险最高） |
 | `DONT_ASK` | 要确认的一律拒绝 | 定时任务，无人值守 |
 
-  模式内部可配 `allow_rules / deny_rules / ask_rules`（工具名 + 过滤器 + 命中行为），从左向右先命中先生效。
-- **工作区**：文件系统三档隔离（per_agent / per_session / per_user），沙箱支持本地 / Docker / E2B（云沙箱服务商）/ K8s（Kubernetes，容器编排平台）。
-- **中间件**：七类挂点（reply / reasoning / acting / model / permission / 压缩 / 系统提示词）。
-- **长期记忆**：官方 `AgenticMemoryMiddleware`（Markdown 落盘工作区），也接 ReMe / Mem0。
+模式内部可配 `allow_rules / deny_rules / ask_rules`（工具名 + 过滤器 + 命中行为），从左向右先命中先生效。
 
-## 2.2 接法一：SDK 自建服务
+HITL 在框架里是**「两种暂停 + 一个结构化提问工具」**，全部原生支持：
 
-案例：公开信息简报助手——大白话提问，Leader 调度「信息检索」（挂 MCP 搜索）、「情报提炼」（空工具箱）两个专家，产出带源链接的简报；后端 FastAPI + PostgreSQL（PG），自己的前端调 `/health` `/sessions` `/chat`。
+1. **权限触发暂停**：工具调用命中 ASK → `RequireUserConfirmEvent`，reply 挂起；用户经 `ConfirmResult` 逐条批准 / 拒绝 / **甚至改写工具入参**，还可附带 `suggested_rules` 让同类调用未来自动放行（规则持久化）。
+2. **外部执行暂停**：工具标记 `is_external_tool=True` → `RequireExternalExecutionEvent` 暂停，结果由外部系统或人工做完后回填再恢复——「人工审批不只是 yes/no，还可以是人工做完再交回」。
+3. **AskUser 工具**：一次最多 4 个问题、每题 2–4 个选项 + 自由输入，答案带 metadata 结构化回传，供程序分支。
 
-**五个关键工程决策**：
+### 2.1.8 工作区：文件系统与沙箱
 
-| 决策 | 做法 | 解决什么 |
-|---|---|---|
-| 1. Agent 无状态 | 每次 HTTP 请求重建 team，注入从 PG 读回的 AgentState；请求结束丢掉 | 记忆在库里——刷新、切实例、重启都能续聊 |
-| 2. 模型单例 | FastAPI lifespan 里建一次 `OpenAIChatModel`，全 Agent 共用 | 换模型只改一处 |
-| 3. 编排 = FunctionTool 包函数 | Leader 不直接调专家，只点工具名 | SDK 侧最轻的多 Agent 协同 |
-| 4. 同会话互斥 | `pg_try_advisory_lock` 按 session_id 加锁，抢不到 409 | 锁放 PG 上，多 worker / 多实例都看得见 |
-| 5. SSE 只转两类事件 | 工具名 + 正文增量 | 内部事件（thinking 等）不泄漏给前端 |
+- **三档隔离**：per_agent / per_session / per_user；
+- **沙箱后端**（源码目录）：本地、Docker、E2B、Daytona、Bubblewrap、Apple Container 等；
+- **MCP 网关**：工作区自带网关（gateway client/shim），沙箱内可安全访问外部 MCP 工具；
+- 工作区资源有独立的管理 API（列表、上传、下载带签名 URL）。
 
-组队代码骨架（节选）：
+### 2.1.9 中间件、RAG 与长期记忆
 
-```python
-model = OpenAIChatModel(          # 进程启动时建一次，所有 Agent 共用
-    credential=OpenAICredential(api_key=..., base_url=...),
-    model="chatling-plus",
-    stream=True,
-    client_kwargs={"timeout": 120.0},   # 超时/重试在这一层调
-)
-searcher = Agent(
-    name="信息检索", system_prompt=_SEARCHER_PROMPT, model=model,
-    toolkit=Toolkit(mcps=[tavily]),           # 空列表，不是 None
-    react_config=ReActConfig(max_iters=1),
-    state=with_bypass(rec.searcher_state),    # 从 PG 读回的 AgentState 注入
-)
-extractor = Agent(
-    name="情报提炼", system_prompt=_EXTRACTOR_PROMPT, model=model,
-    toolkit=Toolkit(),                        # 空的，调不到任何外部工具
-    ...
-)
-leader = Agent(
-    name="公开信息简报助手", model=model,
-    toolkit=Toolkit(
-        tools=[FunctionTool(ask_searcher), FunctionTool(ask_extractor)],
-        skills_or_loaders=[str(_SKILL_DIR)],  # Skill 目录挂进工具箱
-    ),
-    react_config=ReActConfig(max_iters=12), ...
-)
-```
+- **中间件七类挂点**（源码 docstring）：reply、reasoning、acting、model call、permission 检查、上下文压缩、系统提示词——不改 Agent 源码扩展行为；
+- **官方中间件实现**：长期记忆（`AgenticMemoryMiddleware`，Markdown 落盘工作区）、RAG、模型路由（model router）、预算（budget）、追踪（tracing）、语音合成；也接 ReMe / Mem0；
+- **RAG 模块**：文档解析（parser）→ 分块（chunker）→ 向量库（vdb）→ 挂到会话检索。
 
-同一会话的请求生命周期（HTTP 层全部骨架）：
+## 2.2 智能体即服务（Agent Service 层）
 
-```
-lock = await store.try_acquire_lock(session_id)   # pg_try_advisory_lock，抢不到 → 409
-rec  = await load_or_create(session_id, user_id)  # 三份 AgentState 从 PG 读回
-team = build_team(model, tavily, rec)             # 注入状态、组队
-async for ev in team.leader.reply_stream(UserMsg(...)):
-    ...   # ToolCallStartEvent → SSE {"type":"tool","name":"信息检索"}
-    ...   # TextBlockDeltaEvent → SSE {"type":"text","delta":...}
-rec.leader_state = team.leader.state              # 整份 AgentState 写回
-await store.upsert(rec); await lock.release()     # 成功/失败/断开都要放
-```
+### 2.2.1 架构与资源模型
 
-**现象 → SDK 组件对照**：
-
-| 用户看到的现象 | SDK 对应物 |
-|---|---|
-| 界面弹出「信息检索」「情报提炼」标签 | `ToolCallStartEvent`，只推工具名 |
-| 文字一条条蹦出来 | `TextBlockDeltaEvent` 转 SSE |
-| 简报按固定章节排版 | Skill（SKILL.md），只给 Leader 挂载 |
-| 第二句还记得历史 | `AgentState` 落 PG，续聊时读回注入 |
-| 生成中再发一条 → 409 | `pg_try_advisory_lock` |
-| 换模型只改一处 | 模型单例，Agent 与厂商解耦 |
-
-**什么时候选 SDK**：已有网关/前端，只想挂三五个口，SSE 字段、鉴权流、落库结构自己定；代价是外壳（鉴权、会话、锁、流式转发、多实例总线）全自己写。
-
-## 2.3 接法二：Agent Service（create_app + HTTP API）
-
-启动：`create_app(storage=..., message_bus=..., workspace_manager=..., ...)` 三参必填（可选还有知识库、Hub、SubAgent 模板、消息渠道等）；`uv pip install agentscope[full]` 后跑 `examples/agent_service/main.py`，默认 8000 端口。**注意**：十几组 router 一次挂齐，只能整棵 mount，摘不下来——想只暴露几个接口或自定义 SSE 字段，走 §2.2 的 SDK 接法。
-
-### 资源模型与身份
+`create_app` 三个构造参数必填（存储 / 消息总线 / 工作区管理器；可选还有知识库、Hub、SubAgent 模板、消息渠道、中间件等），一键起多租户 FastAPI 服务。
 
 身份不是 cookie，是请求头 **`X-User-ID`**（缺头 401），所有资源按 user 隔离；**服务不自带鉴权**——`X-User-ID` 只是占位，生产上要换自己的 JWT / OAuth 中间件。
 
@@ -279,46 +297,11 @@ await store.upsert(rec); await lock.release()     # 成功/失败/断开都要�
 | `mcps` / `skills` | 用户安装的工具库 | name、hub 来源、enabled |
 | `teams` | 多智能体小队 | 队内 leader / worker 关系 |
 
-`sessions.payload` 更新节奏不同：`config`（workspace、会话名、主备模型）改配置才变；`state`（AgentState 运行态快照）**每轮对话结束整份更新**——`messages` 只做历史展示，**续聊的短期记忆只靠 `state`**。
+`sessions.payload` 两部分更新节奏不同：`config`（workspace、会话名、主备模型）改配置才变；`state`（AgentState 运行态快照）**每轮对话结束整份更新**——`messages` 只做历史展示，**续聊的短期记忆只靠 `state`**。
 
-### 五步跑通第一轮对话
+### 2.2.2 对话 API：发收分离
 
-```bash
-BASE=http://127.0.0.1:8000; USER_ID=eval-user-1
-
-# ① 注册凭证（之后请求只引用 credential_id）
-curl -sS -X POST "$BASE/credential/" -H "Content-Type: application/json" -H "X-User-ID: $USER_ID" \
-  -d '{"data":{"type":"openai_credential","api_key":"$KEY","base_url":"$BASE_URL"}}'
-# 201 → {"credential_id": "0441ce22…"}
-
-# ② 创建 Agent（context_config/react_config/invite_config 不传有默认值）
-curl -sS -X POST "$BASE/agent/" -H "Content-Type: application/json" -H "X-User-ID: $USER_ID" \
-  -d '{"name":"CloudAgent1","system_prompt":"You are a concise assistant."}'
-# 201 → {"agent_id": "a2d6fa18…"}
-
-# ③ 创建 Session（挂上主备模型）
-curl -sS -X POST "$BASE/sessions/" -H "Content-Type: application/json" -H "X-User-ID: $USER_ID" \
-  -d '{"agent_id":"$AGENT_ID","name":"eval-session-1",
-       "chat_model_config":{"type":"openai_chat","credential_id":"$CRED_ID",
-                           "model":"chatling-plus","parameters":{"temperature":0.4}},
-       "fallback_chat_model_config":{"type":"openai_chat","credential_id":"$CRED_ID",
-                           "model":"chatling-turbo","parameters":{}}}'
-# 201 → {"session_id": "9728c621…"}
-
-# ④ 先订阅（SSE），再发消息
-curl -N "$BASE/sessions/$SESSION_ID/stream?agent_id=$AGENT_ID" -H "X-User-ID: $USER_ID"
-
-# ⑤ 触发对话
-curl -sS -X POST "$BASE/chat/" -H "Content-Type: application/json" -H "X-User-ID: $USER_ID" \
-  -d '{"agent_id":"$AGENT_ID","session_id":"$SESSION_ID",
-       "input":{"name":"zhangsan","role":"user",
-                "content":[{"type":"text","text":"用一句话介绍你自己"}]}}'
-# 200 → {"status": "started"}   ← 正文从 ④ 的订阅口以事件流吐出
-```
-
-换一个 `X-User-ID` 查同一 session → 404（用户隔离）；同一 session 生成中再 POST → 409（会话互斥）。
-
-### SSE 事件速查
+`POST /chat` 立即返回 `{"status":"started"}`，正文从 `GET /sessions/{id}/stream` 以事件流吐出；同一 session 接着再 POST 就是多轮续聊（记忆自动恢复）。
 
 一轮回复的事件序列：`REPLY_START → HINT_BLOCK → MODEL_CALL_START → TEXT_BLOCK_START → TEXT_BLOCK_DELTA … → TEXT_BLOCK_END → MODEL_CALL_END → REPLY_END`
 
@@ -333,7 +316,7 @@ curl -sS -X POST "$BASE/chat/" -H "Content-Type: application/json" -H "X-User-ID
 
 命名规律：`*_START/_DELTA/_END` 是块的生命周期，`MODEL_CALL_*` 是一次推理调用；ReAct 多轮迭代时 `MODEL_CALL_*` 出现多次；事件按 `reply_id` 聚成一轮。
 
-## 2.4 工具接入（API）
+### 2.2.3 工具接入与 Hub（MCP 技能中心）
 
 MCP 和 Skill 同一个模式：**先到用户的库（mcps / skills 表），再挂到某个 agent 的 workspace**。「入库」两条路：直接注册 / 从 Hub 安装。
 
@@ -352,7 +335,7 @@ curl -sS -X POST "$BASE/workspace/mcp?agent_id=$AGENT_ID&session_id=$SESSION_ID"
 
 **Skill**：直接上传走 `POST /workspace/skill/upload`（multipart，manifest 先声明再传 files，只落 workspace 不进 skills 表）；从 Hub 走 `POST /hub/skill/{hub}/cards/{name}/install` → `POST /workspace/skill/from-library {"skill_ids":[...]}`。Skill 不执行代码，模型读 SKILL.md 后按约定格式输出。
 
-## 2.5 多智能体（API）
+### 2.2.4 多智能体：SubAgent 与常驻专家
 
 框架内置团队工具：`TeamCreate` / `AgentCreate` / `AgentInvite` / `TeamSay` / `TeamDelete`，队长 Agent 在 ReAct 里调它们完成协同。两种组队形态：
 
@@ -381,7 +364,13 @@ curl -sS -X POST "$BASE/agent/" -H "Content-Type: application/json" -H "X-User-I
 
 **实测坑**：队长提示词要写死流程约束——成员「只 TeamSay 一次后停止」、队长「禁止对成员 TeamSay（会互唤醒）」「汇总完成前不要 TeamDelete」。不写会导致队员互唤醒、队长抢活自己写。
 
-## 2.6 集群部署（Redis MessageBus）
+### 2.2.5 SOP、资源共享与消息渠道
+
+- **SOP（Standard Operating Procedure，标准作业程序）**：固定里程碑序列的编排形态——只定「有哪些步骤、每一步要证明什么」，每步怎么达成是它自己的事；`SOPEngine` 逐步推进。适合流程确定性强的场景（如审批链）。
+- **资源共享**：支持跨用户共享 API 凭证、agent、知识库（共享 agent 复用模板信息；**工具链和记忆仍按用户隔离**）；共享关系由运维实现 `ResourceAccessPolicyBase`（核心接口 `list_accessible`）挂到 `create_app`。框架未提供公共专家池，默认每用户只能邀请自己的可邀请 agent。
+- **消息渠道**：`create_app(channels=...)` 接入飞书 / 钉钉 / Discord / 自定义渠道，智能体直接在 IM 里服务。
+
+### 2.2.6 集群部署（Redis MessageBus）
 
 单进程用内存总线；**多实例必须换 `RedisMessageBus`**——对话原生拆成两个接口、工具可能很慢、队员可能落在别的实例上。Redis 同时承担三件事：跨实例互斥锁、SSE 事件流转发、唤醒队列。两个核心队列：`inbox(sid)`（存放该 session 的慢工具结果 / 队员汇报）、`trigger(sid)`（就绪队列，可被**任意实例**的 WakeupDispatcher 抢占执行）。
 
@@ -389,20 +378,14 @@ curl -sS -X POST "$BASE/agent/" -H "Content-Type: application/json" -H "X-User-I
 - **慢工具转后台**：工具超时（默认 10 秒）先返回占位、本轮正常结束 → 后台跑完 → 结果写 `inbox(sid)`、sid 进 `trigger(sid)` → 某实例的 WakeupDispatcher 抢到 → 新一轮执行，模型看到工具结果再回答。
 - **多 agent 协同**：队长把 3 个队员任务推进各自 `trigger` → S1/S4/S5 各自抢占执行 → 结果写回 `inbox(队长sid)` + `trigger(队长sid)` → 队长再被唤醒汇总。
 
-## 2.7 两种接法怎么选
+## 2.3 两种接法与本文的实践
 
-| | SDK 自建 | Agent Service API |
-|---|---|---|
-| HTTP | 自己写几个口 | 十几组 router 一次挂齐；流在 session 接口不在 chat |
-| 记忆 | 自己接 AgentState 落库 | 框架按 session 装配，storage 配什么存什么 |
-| 同会话互斥 | 自己加锁（pg_try_advisory_lock → 409） | 框架自带；集群下 Redis 锁 |
-| 工具挂载 | 构造 Agent 时挂 Toolkit（代码里） | API 注册到 workspace / Hub 安装（运行时） |
-| 多智能体 | FunctionTool 包函数（同进程 await） | TeamCreate / AgentCreate / AgentInvite（可跨实例） |
-| 多实例 | 总线和锁自己接 | RedisMessageBus + WakeupDispatcher 现成 |
-| 模型管理 | 代码里初始化 | credential 表 + session 级主备模型 |
-| 前端 | SSE 字段自己定 | 事件类型框架定，配官方 Web UI 最省事 |
+框架有两种接法，各自成体系：
 
-**选 API**：要多租户、运行时动态组队、集群部署，或直接配官方 Web UI。**不选 API**：已有网关只想挂三五个口、流式路径和鉴权流要自己定。两条路不互斥——先用 API 快速验证业务形态，需要深度定制时再把编排逻辑沉到 SDK 层重写外壳。**第三部分就是这条路的全尺寸实践：运行时保持官方 Service 形态不动，平台能力全部外置到自研编排层。**
+- **接法一：SDK 自建服务**。`import agentscope` 直接组装 Agent / 模型 / 工具箱，HTTP 服务、鉴权、会话、锁、SSE 全部自己写。适合：已有网关或前端、只需要三五个接口、SSE 字段与鉴权流要完全自定的场景。代价：服务层外壳全部自己长。
+- **接法二：Agent Service API**。`create_app` 一键起多租户服务，credential / agent / session / Hub / 团队全套 REST API + 官方 Web UI。适合：直接对外提供智能体服务、要多租户与运行时动态组队、集群部署。限制：路由整棵 mount 摘不下来，接口与 SSE 事件类型框架说了算。
+
+**本文的实践走接法二，且更进一步**：运行时保持官方 Service 形态不动（只改组装参数），把用户体系、流程审批、产物版本全部外置到一层自研编排层——相当于给 AgentScope 加一个「业务控制面」。怎么接、改了哪里、为什么这么改，就是第三部分的内容。
 
 ---
 
@@ -471,7 +454,7 @@ curl -sS -X POST "$BASE/agent/" -H "Content-Type: application/json" -H "X-User-I
 
 ## 3.3 文档先行：architecture.md
 
-`platform-design/architecture.md`（v0.5）**先于全部实现代码完成**，git 历史佐证：首条平台提交就是设计文档，之后按 L1 骨架 → JWT + 状态机 → 防腐层 + 阶段会话 → HITL 透传 → 两视图前端 → 运行时入口独立的顺序推进。三个含义：
+`platform-design/architecture.md`（v0.5）**先于全部实现代码完成**，git 历史佐证：首条平台提交就是设计文档，之后按 L1 骨架 → JWT + 状态机 → 适配层 + 阶段会话 → HITL 透传 → 两视图前端 → 运行时入口独立的顺序推进。三个含义：
 
 - **诚实的差距清单**：逐项列「AgentScope 已有 ✅ vs 平台需自建 ❌」——文档导出（docx / xlsx）、组级权限、业务流程 / 审批明确自建，不把不存在的能力当依赖；
 - **决策记录驱动**：已决策 + 待定项分列（如废弃「每项目克隆智能体」改全局共享、测试沙箱定为阶段运行级），修订日志记录方案演化；
@@ -497,13 +480,13 @@ L1 是自研 FastAPI（`platform/backend/`），依赖仅 9 个包、**不 impor
 |---|---|---|
 | **JWT 鉴权** | 多租户用户体系（框架只有 X-User-ID 占位） | scrypt 口令哈希 + PyJWT HS256（HMAC-SHA256 签名算法）；注册自动入 default 组；运行时永远只见 `sys:runtime` |
 | **stage-flow 状态机** | 长周期流程的可审计编排（框架只有会话内编排） | 两级状态机（项目级 + 阶段运行级），唯一实现收敛在 `flow.py` 约 200 行，替代 BPMN（Business Process Model and Notation，业务流程建模标记）引擎 |
-| **runtime 防腐层** | 开源框架升级兼容 | `runtime_client.py` 是全平台唯一访问运行时的模块，8 个类型化操作，刻意收窄的出口 |
+| **runtime 适配层** | 开源框架升级兼容 | `runtime_client.py` 是全平台唯一访问运行时的模块，8 个类型化操作，刻意收窄的出口 |
 | **两视图前端** | 两类用户、两种工作形态 | 项目生命周期（ProjectDetail）+ Agent 工作台（Workbench 三栏），从官方 web_ui 一次性收割改造 |
 
 关键细节：
 
 - **状态机三重守卫**：阶段必须按序串行、同阶段不允许并存活跃 run、已 approved 不可重开；非法转移抛 `FlowError` → 409/400。三张核心表：`stage_runs`（round 记退回轮次）、`approval_tasks`（审批留痕，审计核心表）、`artifact_versions`（产物不可变版本链）。
-- **防腐层三红利**：① 上游改接口只改这一个模块；② 传输失败统一映射 503/502（`RuntimeCallError` 与业务 `FlowError` 同构，API 层统一翻译）；③ `list_credentials` 丢掉原始 api_key 只回 id/name/type——安全投影，key 永不落 L1。防腐层（Anti-Corruption Layer，ACL）是领域驱动设计（DDD，Domain-Driven Design）的经典模式：在自己模型与外部系统之间放一层翻译，防止外部系统的变更渗透进内部模型。
+- **适配层三红利**：传输失败统一映射 503/502；`list_credentials` 丢掉原始 api_key 只回 id/name/type（安全投影）；上游改接口只改这一个模块。
 - **自愈设计**：`ensure_stage_session` 懒创建会话 + 每次发消息前 PATCH 模型配置——运行时不可用时阶段照常开启，凭证后配也能自愈。
 - 前端 M1 用轮询而非 SSE 透传（智能间隔：运行中 1.5s，否则 4s），SSE 是 M2 待办。
 
@@ -521,7 +504,7 @@ L1 是自研 FastAPI（`platform/backend/`），依赖仅 9 个包、**不 impor
 工具调用命中 ASK → 运行时挂起 reply，tool_call 置 asking
   → 前端 Workbench 弹出确认条（逐个工具名）
   → 用户点「允许/拒绝」→ POST /stage-runs/{id}/confirm
-  → L1 鉴权后经防腐层回执 → 运行时恢复挂起的 reply
+  → L1 鉴权后经适配层回执 → 运行时恢复挂起的 reply
 ```
 
 **宏观：阶段产物审批**（L1 自建状态机，银行审计要求）：
@@ -547,7 +530,7 @@ L1 是自研 FastAPI（`platform/backend/`），依赖仅 9 个包、**不 impor
 
 ## 3.8 当前状态与路线图
 
-**M1 已完成**（backend 进度清单全勾）：组织模型、项目模型、JWT 登录（含登录页自助注册）、阶段状态机、防腐层 + 阶段会话自愈、6 个阶段智能体播种、负责人 / 审批人双视角（审批中心收件箱 + 产物预览审批 + 成员管理）、阶段技能包（测试用例阶段自动装 7 法：等价类 / 边界值 / 判定表 / 场景法 / 状态迁移 / 正交配对 / 错误推测）、移除成员在途审批自动改道。已通的端到端流程：注册 → 登录 → 建项目 → 加审批人成员 → 启动阶段 → 对话（HITL 工具确认）→ 提交送审 → 审批人审批 → 自动推进下一阶段 → 已完成阶段只读回看。
+**M1 已完成**（backend 进度清单全勾）：组织模型、项目模型、JWT 登录（含登录页自助注册）、阶段状态机、适配层 + 阶段会话自愈、6 个阶段智能体播种、负责人 / 审批人双视角（审批中心收件箱 + 产物预览审批 + 成员管理）、阶段技能包（测试用例阶段自动装 7 法：等价类 / 边界值 / 判定表 / 场景法 / 状态迁移 / 正交配对 / 错误推测）、移除成员在途审批自动改道。已通的端到端流程：注册 → 登录 → 建项目 → 加审批人成员 → 启动阶段 → 对话（HITL 工具确认）→ 提交送审 → 审批人审批 → 自动推进下一阶段 → 已完成阶段只读回看。
 
 **M2–M5 待办**：SSE 透传（现为轮询）、契约测试、知识库组授权、测试沙箱（Docker）、docx / xlsx 导出、记忆沉淀闭环、K8s 多实例部署。
 
@@ -555,7 +538,7 @@ L1 是自研 FastAPI（`platform/backend/`），依赖仅 9 个包、**不 impor
 
 # 参考资料
 
-- **AgentScope**：https://github.com/agentscope-ai/agentscope ｜ 文档 https://docs.agentscope.io/zh/versions/2.0.9 ｜ 本仓库 `examples/agent_service/`、`examples/web_ui/`
+- **AgentScope**：https://github.com/agentscope-ai/agentscope ｜ 文档 https://docs.agentscope.io/zh/versions/2.0.10 ｜ 本仓库 `examples/agent_service/`、`examples/web_ui/`
 - **LangGraph**：https://github.com/langchain-ai/langgraph ｜ DeepAgents：https://github.com/langchain-ai/deepagents
 - **DeerFlow**：https://github.com/bytedance/deer-flow ｜ https://deerflow.tech
 - **DeepSeek Harness**：https://github.com/deepseek-ai/deepseek-harness ｜ Cordis：https://github.com/cordiverse/cordis
