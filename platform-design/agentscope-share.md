@@ -455,7 +455,7 @@ curl -sS -X POST "$BASE/agent/" -H "Content-Type: application/json" -H "X-User-I
 
 ## 3.3 文档先行：architecture.md
 
-`platform-design/architecture.md`（v0.5）**先于全部实现代码完成**，git 历史佐证：首条平台提交就是设计文档，之后按 L1 骨架 → JWT + 状态机 → 适配层 + 阶段会话 → HITL 透传 → 两视图前端 → 运行时入口独立的顺序推进。三个含义：
+`platform-design/architecture.md`（v0.6）**先于全部实现代码完成**，git 历史佐证：首条平台提交就是设计文档，之后按 L1 骨架 → JWT + 状态机 → 适配层 + 阶段会话 → HITL 透传 → 两视图前端 → 运行时入口独立的顺序推进。三个含义：
 
 - **诚实的差距清单**：逐项列「AgentScope 已有 ✅ vs 平台需自建 ❌」——文档导出（docx / xlsx）、组级权限、业务流程 / 审批明确自建，不把不存在的能力当依赖；
 - **决策记录驱动**：已决策 + 待定项分列（如废弃「每项目克隆智能体」改全局共享、测试沙箱定为阶段运行级），修订日志记录方案演化；
@@ -486,6 +486,26 @@ L1 是自研 FastAPI（`platform/backend/`），依赖仅 9 个包、**不 impor
 | **runtime 适配层** | 开源框架升级兼容 | `runtime_client.py` 是全平台唯一访问运行时的模块，8 个类型化操作，刻意收窄的出口 |
 | **两视图前端** | 两类用户、两种工作形态 | 项目生命周期（ProjectDetail）+ Agent 工作台（Workbench 三栏），从官方 web_ui 一次性收割改造 |
 
+**L1 的领域模型**（图取自 `architecture.md` §4.1）：
+
+```
+users ──< group_members >── groups
+  │                            │
+  │ (一人多项目,一项目多人)        │ (组级授权)
+  ├──< project_members >──┐    │
+  │                       ▼    │
+  │                    projects ──< project_kb_links >── kbs ──< kb_grants >──┘
+  │                       │
+  │                       ├──< stage_runs(阶段运行) ──< approval_tasks(审批任务)
+  │                       │         │
+  │                       │         └── session_id → AgentScope 会话(外部系统)
+  │                       └──< artifact_versions(产物版本)
+  │
+  └──(沉淀)── kb_documents / case_library(案例库, 属于 kbs)
+```
+
+M1 已落库组织与流程主链（users / groups / group_members / projects / project_members / stage_runs / approval_tasks / artifact_versions）；kbs 一族（知识库 / 组级授权 / 项目绑定 / 案例库）是 M3。`stage_runs.session_id` 指向 AgentScope 会话是**跨系统软引用**——业务库与运行时库永不共享表，只存 ID、不建外键。
+
 关键细节：
 
 - **状态机三重守卫**：阶段必须按序串行、同阶段不允许并存活跃 run、已 approved 不可重开；非法转移抛 `FlowError` → 409/400。三张核心表：`stage_runs`（round 记退回轮次）、`approval_tasks`（审批留痕，审计核心表）、`artifact_versions`（产物不可变版本链）。
@@ -500,6 +520,8 @@ L1 是自研 FastAPI（`platform/backend/`），依赖仅 9 个包、**不 impor
 6 个阶段智能体**全局共享、挂在 `sys:runtime` 名下**，项目创建时零智能体创建（废弃了「每项目克隆」方案）。安全性由机制保证：`AgentState` 属于 Session 而非 Agent，**同一智能体开 N 个会话互不污染**——「定义共享、状态随会话」。智能体由 `scripts/seed.py` 幂等播种，6 个全部就位（需求分析提示词约束：三轮澄清提问、FR（Functional Requirement，功能需求）编号 + 优先级、不臆造需求、保留用户原话）。
 
 ### 两层 HITL，互不替代
+
+两级状态机是骨架，两层 HITL 是骨架上的两类人工介入点：**微观发生在 IN_PROGRESS 的对话内**（挂起/恢复 reply，不产生状态转移），**宏观就是驱动 UNDER_REVIEW → APPROVED / RETURNED 的裁决动作**；项目级状态机（DRAFT → ACTIVE → ACCEPTED → ARCHIVED）管项目的一生，与 HITL 无关。
 
 **微观：对话内工具确认**（复用 AgentScope 原生权限暂停）：
 
@@ -547,4 +569,4 @@ L1 是自研 FastAPI（`platform/backend/`），依赖仅 9 个包、**不 impor
 - **DeepSeek Harness**：https://github.com/deepseek-ai/deepseek-harness ｜ Cordis：https://github.com/cordiverse/cordis
 - **Dify**：https://github.com/langgenius/dify ｜ https://docs.dify.ai
 - **OpenCode**：https://github.com/anomalyco/opencode ｜ https://opencode.ai
-- **平台设计**：本仓库 `platform-design/architecture.md`（v0.5）
+- **平台设计**：本仓库 `platform-design/architecture.md`（v0.6）
