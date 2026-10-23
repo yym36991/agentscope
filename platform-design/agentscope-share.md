@@ -37,9 +37,9 @@
 - 生态分层：LangChain（框架）→ LangGraph（编排运行时）→ Deep Agents（上层 harness）→ LangSmith（监控平台）。
 - **匹配度：中高**——只选「编排库」时的最强替代；但多租户、会话管理、SSE、凭证管理全部要自建或购买。
 
-### DeerFlow（字节）——事件驱动的通用智能体应用
+### DeerFlow（字节）——深度研究超级智能体应用
 
-- Python + Next.js。
+- Python + Next.js。**v2.0（2026-06）彻底重写**——v1 是 2025-03 基于 LangGraph 的链式深度研究流水线；下文对比一律以 v2 为准。
 - 定位是「超级智能体底座」，擅长长时域、探索型任务：深度研究、报告生成、代码编写、幻灯片制作。核心卖点是单主智能体（Lead Agent）动态派生子智能体并行工作，配合 Docker 沙箱执行、渐进式技能加载和多种 channel IM 接入。**单个更聪明的智能体，而不是多个**——它只是一个 ReAct 循环，只有一张图。
 
 ### DeepSeek Harness（DeepSeek AI）——一切皆插件
@@ -69,7 +69,7 @@
 | 框架 | 维护方 | 语言 | 形态 | 协议 | Star* | 核心抽象 | 编排方式 |
 |---|---|---|---|---|---|---|---|
 | LangGraph | LangChain | Python + TS | 库 + 开发服务器 + 商业平台 | MIT | 43.6k | 状态图 | 代码优先 |
-| DeerFlow | 字节跳动 | Python + TS | 单体应用（CLI + Web UI） | MIT | 84.2k | 事件驱动运行时 | 组合驱动 |
+| DeerFlow | 字节跳动 | Python + TS | 单体应用（CLI/Web UI + 多 IM 渠道） | MIT | 84.2k | Lead Agent + 动态子智能体 | 单 ReAct 循环动态派生 |
 | DeepSeek Harness | DeepSeek | TypeScript | 桌面/Web/CLI + SDK | MIT | 256k | 插件树 + 事件流 | 配置组合 |
 | Dify | LangGenius | Python + TS | 可视化平台（自托管/云） | Dify 许可† | 159k | 可视化工作流画布 | 可视化优先 |
 | OpenCode | Anomaly | TypeScript | 终端/桌面编程助手（C/S） | MIT | 219k | 会话 + 工具循环 | 配置 |
@@ -81,7 +81,7 @@
 
 | 需求 | LangGraph | DeerFlow | DeepSeek Harness | Dify | OpenCode | AgentScope |
 |---|---|---|---|---|---|---|
-| 多智能体编排 | ★★★ 图任意拓扑 | ★★ 规划器 + ReAct 循环 | ★★ Agent Teams（实验） | ★★ 画布节点 | ★ 双 agent | ★★★ Pipeline/Team/SOP/SubAgent 多形态 |
+| 多智能体编排 | ★★★ 图任意拓扑 | ★★ Lead Agent 动态派生子智能体 | ★★ Agent Teams（实验） | ★★ 画布节点 | ★ 双 agent | ★★★ Pipeline/Team/SOP/SubAgent 多形态 |
 | 人工审批 HITL | ★★★ interrupt + checkpoint | ★★★ 一等原语，任意时点暂停（v2 重写动机） | ★★ 权限审批 | ？（未确认） | ★★ permissions | ★★★ 双暂停 + AskUser + 规则持久化 |
 | 自定义 HTTP 服务 | ★★★ 纯库自控 | ★ 单体应用 | ★★ SDK 可嵌 | ★★ BaaS，深度受限 | ★★★ serve + OpenAPI | ★★★ SDK 嵌入或 Service 开放边界 |
 | 多用户隔离 | ★★ 自建 | ★ 无 | ★ 无（单用户） | ★★ 有 workspace，**许可证禁多租户** | ★ 无 | ★★★ 原生多租户（实测 404/409） |
@@ -93,7 +93,7 @@
 
 - **LangGraph**：只选「编排库」时的最强（LangGraph + 自写服务层），但服务层要全部自己写；
 - **Dify**：许可证 + 架构冲突，出局；
-- **DeerFlow / OpenCode / DeepSeek Harness**：不作底座，各吸收一点——DeerFlow 验证了「HITL 是常态而非异常」、OpenCode 的 OpenAPI 接口治理与只读分级、DeepSeek Harness 的事件溯源审计；
+- **DeerFlow / OpenCode / DeepSeek Harness**：不作底座，各吸收一点——DeerFlow v2 验证了「HITL 是常态而非异常」、OpenCode 的 OpenAPI 接口治理与只读分级、DeepSeek Harness 的事件溯源审计；
 - **AgentScope**：五项需求全绿的唯一候选；代价（Python-only、月度迭代）在第三部分用适配层对冲。
 
 ---
