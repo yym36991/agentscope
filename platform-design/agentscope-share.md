@@ -96,7 +96,7 @@
 - **LangGraph**：只选「编排库」时的最强替代（大概率路线是 LangGraph + 自写服务层），但服务层要全部自己长出来；
 - **Dify**：许可证 + 架构冲突，出局；
 - **DeerFlow / OpenCode / DeepSeek Harness**：不作底座，各吸收一点——DeerFlow 验证了「HITL 是常态而非异常」、OpenCode 的 OpenAPI 接口治理与只读分级、DeepSeek Harness 的事件溯源审计；
-- **AgentScope**：五项需求全绿的唯一候选；代价（Python-only、月度迭代、分布式 WIP）在第三部分用防腐层对冲。
+- **AgentScope**：五项需求全绿的唯一候选；代价（Python-only、月度迭代、分布式 WIP）在第三部分用防腐层（Anti-Corruption Layer，见 §3.5）对冲。
 
 ---
 
@@ -503,7 +503,7 @@ L1 是自研 FastAPI（`platform/backend/`），依赖仅 9 个包、**不 impor
 关键细节：
 
 - **状态机三重守卫**：阶段必须按序串行、同阶段不允许并存活跃 run、已 approved 不可重开；非法转移抛 `FlowError` → 409/400。三张核心表：`stage_runs`（round 记退回轮次）、`approval_tasks`（审批留痕，审计核心表）、`artifact_versions`（产物不可变版本链）。
-- **防腐层三红利**：传输失败统一映射 503/502；`list_credentials` 丢掉原始 api_key 只回 id/name/type（安全投影）；上游改接口只改这一个模块。
+- **防腐层三红利**：① 上游改接口只改这一个模块；② 传输失败统一映射 503/502（`RuntimeCallError` 与业务 `FlowError` 同构，API 层统一翻译）；③ `list_credentials` 丢掉原始 api_key 只回 id/name/type——安全投影，key 永不落 L1。防腐层（Anti-Corruption Layer，ACL）是领域驱动设计（DDD，Domain-Driven Design）的经典模式：在自己模型与外部系统之间放一层翻译，防止外部系统的变更渗透进内部模型。
 - **自愈设计**：`ensure_stage_session` 懒创建会话 + 每次发消息前 PATCH 模型配置——运行时不可用时阶段照常开启，凭证后配也能自愈。
 - 前端 M1 用轮询而非 SSE 透传（智能间隔：运行中 1.5s，否则 4s），SSE 是 M2 待办。
 
