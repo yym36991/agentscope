@@ -55,7 +55,8 @@ API 文档：http://localhost:8100/docs
 - [x] 阶段状态机：stage_runs / approval_tasks / artifact_versions
       （提交→待审→通过/退回；退回重开 round+1；审批通过自动推进项目阶段）
 - [x] runtime_client 防腐层 + 阶段会话生命周期
-      （启动阶段即建会话；运行时不可用时降级为懒创建，对话中自愈）
+      （开启阶段为纯数据库操作；会话推迟到首条消息时懒创建并携带
+      kickoff——运行时不可用不阻碍开阶段，凭证后配也能在对话中自愈）
 - [x] 需求生成智能体接入（scripts/seed.py 种到 sys:runtime 名下）
 - [x] 角色分工：项目负责人视图 + 审批中心（审批人收件箱，产物预览审批；
       成员管理端点，APPROVER 角色按 D8 解析审批收件人）
