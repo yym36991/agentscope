@@ -554,11 +554,14 @@ async def _relay_chat(
     db: AsyncSession,
     run: StageRun,
     project: Project,
+    user: User,
     message: str,
     blocks: list[dict] | None = None,
 ) -> str:
     """Shared tail of the two chat relays: ensure the session, self-heal
-    the model config, deliver the message. Returns the session id.
+    the model config, deliver the message — attributed to *user*'s
+    display name (display-level audit; the runtime principal stays
+    sys:runtime). Returns the session id.
 
     The FIRST message into a run's session doubles as the kickoff:
     opening a stage does not fire the agent, so the stage context
@@ -605,7 +608,9 @@ async def _relay_chat(
         except RuntimeCallError as exc:
             if exc.status != 409:
                 raise
-        await client.send_message(agent_id, session_id, message, blocks)
+        await client.send_message(
+            agent_id, session_id, message, blocks, speaker=user.display_name
+        )
     except FlowError as exc:
         raise _flow_http(exc) from exc
     except RuntimeCallError as exc:
@@ -638,7 +643,7 @@ async def chat_with_stage_run(
             detail=f"run #{run.id} is {run.status.value}, "
             f"chat is only open while in_progress",
         )
-    session_id = await _relay_chat(db, run, project, payload.content)
+    session_id = await _relay_chat(db, run, project, user, payload.content)
     return {"ok": True, "session_id": session_id}
 
 
@@ -882,7 +887,7 @@ async def chat_with_upload(
         )
 
     message = (text or "").strip() or f"我上传了文件「{name}」，请查收。"
-    session_id = await _relay_chat(db, run, project, message, blocks)
+    session_id = await _relay_chat(db, run, project, user, message, blocks)
     return {"ok": True, "session_id": session_id, "file": name}
 
 

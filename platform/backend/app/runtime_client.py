@@ -270,8 +270,14 @@ class RuntimeClient:
         session_id: str,
         text: str,
         blocks: list[dict] | None = None,
+        speaker: str = "user",
     ) -> None:
         """Fire-and-forget user message; output lands on the SSE stream.
+
+        *speaker* is the Msg name — display-level attribution of which
+        project member said this (the audit "who said what"), not an
+        identity: the request still goes out as sys:runtime and the
+        runtime grants nothing based on the name.
 
         *blocks* are extra content blocks appended after the text —
         e.g. the DataBlock of an uploaded file (base64 image/PDF) or an
@@ -291,7 +297,7 @@ class RuntimeClient:
                 "agent_id": agent_id,
                 "session_id": session_id,
                 "input": {
-                    "name": "user",
+                    "name": speaker,
                     "role": "user",
                     "content": content,
                 },
