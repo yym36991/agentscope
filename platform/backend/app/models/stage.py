@@ -41,6 +41,14 @@ class ApprovalStatus(str, enum.Enum):
     RETURNED = "returned"
 
 
+class ApprovalKind(str, enum.Enum):
+    """What the task decides on: a stage run's artifact, or (M4) a
+    project's knowledge-consolidation draft (§6.4)."""
+
+    STAGE = "stage"
+    CONSOLIDATION = "consolidation"
+
+
 class ArtifactFormat(str, enum.Enum):
     MD = "md"
     DOCX = "docx"
@@ -73,6 +81,11 @@ class StageRun(Base):
     # 1 for the first attempt, +1 per rework round after a return.
     round: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     session_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Explicit runtime workspace binding (§8.5): doc stages share the
+    # project workspace, the testing stage gets a per-run scratch one.
+    # Persisted so the mapping survives scheme changes; NULL on runs
+    # from before the column existed (M1, PER_AGENT default).
+    workspace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     started_by_user_id: Mapped[int] = mapped_column(
         ForeignKey("users.id"), nullable=False
     )
@@ -95,15 +108,25 @@ class StageRun(Base):
 
 
 class ApprovalTask(Base):
-    """A pending human decision on a submitted stage run."""
+    """A pending human decision — on a submitted stage run (kind=stage)
+    or on a project's consolidation draft (kind=consolidation, §6.4)."""
 
     __tablename__ = "approval_tasks"
 
     id: Mapped[int] = mapped_column(
         BigInteger, primary_key=True, autoincrement=True
     )
-    stage_run_id: Mapped[int] = mapped_column(
-        ForeignKey("stage_runs.id"), index=True
+    kind: Mapped[ApprovalKind] = mapped_column(
+        Enum(ApprovalKind, name="approval_kind"),
+        default=ApprovalKind.STAGE,
+        nullable=False,
+    )
+    # NULL for consolidation tasks (they carry project_id instead).
+    stage_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("stage_runs.id"), index=True, nullable=True
+    )
+    project_id: Mapped[int | None] = mapped_column(
+        ForeignKey("projects.id"), index=True, nullable=True
     )
     approver_user_id: Mapped[int] = mapped_column(
         ForeignKey("users.id"), index=True

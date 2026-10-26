@@ -10,12 +10,18 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.api import auth, projects, routes
+from app.api import auth, kbs, projects, routes
+from app import mcp_server
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    yield
+    # The price-baseline MCP sub-app builds its session manager inside
+    # its own lifespan; mounted Starlette apps never receive the
+    # parent's lifespan events, so enter the sub-app's lifespan here —
+    # the composition fastmcp's ASGI docs prescribe.
+    async with app.state.price_mcp_app.lifespan(app.state.price_mcp_app):
+        yield
     from app.db import engine
     from app.runtime_client import get_runtime_client
 
@@ -32,6 +38,12 @@ def create_app() -> FastAPI:
     app.include_router(routes.router)
     app.include_router(auth.router)
     app.include_router(projects.router)
+    app.include_router(kbs.router)
+    price_mcp_app = mcp_server.mcp.http_app(path="/")
+    app.state.price_mcp_app = price_mcp_app
+    # http://<host>:<port>/mcp/price/ — streamable-http endpoint the
+    # runtime's default_mcps consumes (§7.1 structured price track).
+    app.mount("/mcp/price", price_mcp_app)
     return app
 
 

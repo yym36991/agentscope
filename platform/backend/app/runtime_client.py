@@ -153,13 +153,13 @@ class RuntimeClient:
             )
         return safe
 
-    async def default_chat_model_config(self) -> dict | None:
-        """Platform-default ChatModelConfig, or None if unconfigured.
+    async def build_chat_model_config(self, model: str | None = None) -> dict | None:
+        """ChatModelConfig for *model* (default: the platform default).
 
-        Model choice is a platform setting; the credential is whatever
-        the operator registered under sys:runtime first (exactly one in
-        M1). Sessions created while this is None get PATCHed later by
-        the chat relay once a credential shows up.
+        None if no credential exists yet — the caller decides whether
+        to create the session bare and self-heal later via PATCH.
+        The credential is whatever the operator registered under
+        sys:runtime first; per-stage model choice rides on ``model``.
         """
         creds = await self.list_credentials()
         if not creds:
@@ -167,23 +167,38 @@ class RuntimeClient:
         return {
             "type": creds[0]["type"] or "anthropic",
             "credential_id": creds[0]["id"],
-            "model": get_settings().runtime_model,
+            "model": model or get_settings().runtime_model,
             "parameters": {},
         }
 
     # ---------- sessions ----------
 
     async def create_session(
-        self, agent_id: str, name: str, chat_model_config: dict | None
+        self,
+        agent_id: str,
+        name: str,
+        chat_model_config: dict | None,
+        workspace_id: str | None = None,
+        kb_ids: list[str] | None = None,
     ) -> str:
-        """Open a session (upsert per principal+agent+workspace).
+        """Open a new session; returns its id.
 
         ``chat_model_config`` may be None — the chat relay self-heals
-        it via PATCH once a credential exists.
+        it via PATCH once a credential exists. ``workspace_id`` is the
+        §8.5 explicit binding (doc stages share the project workspace,
+        the testing stage gets a per-run one). ``kb_ids`` mounts the
+        RAG middleware (§7.2) — None/empty means no KB wired.
         """
         body: dict = {"agent_id": agent_id, "name": name}
         if chat_model_config is not None:
             body["chat_model_config"] = chat_model_config
+        if workspace_id is not None:
+            body["workspace_id"] = workspace_id
+        if kb_ids:
+            body["knowledge_config"] = {
+                "knowledge_base_ids": kb_ids,
+                "parameters": {},
+            }
         data = await self._request("POST", "/sessions/", json=body)
         return data["session_id"]  # type: ignore[index]
 
@@ -196,6 +211,110 @@ class RuntimeClient:
             f"/sessions/{session_id}",
             params={"agent_id": agent_id},
             json={"chat_model_config": chat_model_config},
+        )
+
+    # ---------- knowledge bases ----------
+
+    async def embedding_model_config(self) -> dict | None:
+        """EmbeddingModelConfig for KB creation, or None if the runtime
+        has no OpenAI-compatible credential yet.
+
+        The operator registers it under sys:runtime (zhipu's
+        OpenAI-compatible endpoint serves embedding-3); until then KB
+        creation fails with a clear message and RAG stays off —
+        chat keeps working, matching the best-effort skill installs.
+        """
+        creds = await self.list_credentials()
+        for cred in creds:
+            if cred["type"] == "openai_credential":
+                return {
+                    "type": "openai_credential",
+                    "credential_id": cred["id"],
+                    "model": get_settings().runtime_embedding_model,
+                    "dimensions": get_settings().runtime_embedding_dimensions,
+                }
+        return None
+
+    async def create_kb(self, name: str, description: str = "") -> str:
+        """Create a runtime KB under sys:runtime; returns its id.
+
+        The embedding model is pinned at creation (runtime rule);
+        dimensions come from settings and must match the model.
+        """
+        embedding = await self.embedding_model_config()
+        if embedding is None:
+            raise RuntimeCallError(
+                503,
+                "运行时还没有可用于向量化的凭证（sys:runtime 名下缺少 "
+                "openai 类型 credential）——请管理员在运维控制台注册后再"
+                "创建知识库",
+            )
+        data = await self._request(
+            "POST",
+            "/knowledge_bases/",
+            json={
+                "name": name,
+                "description": description,
+                "embedding_model_config": embedding,
+            },
+        )
+        return data["knowledge_base_id"]  # type: ignore[index]
+
+    async def upload_kb_document(
+        self,
+        kb_id: str,
+        filename: str,
+        data: bytes,
+        content_type: str | None = None,
+    ) -> dict:
+        """Register a document for indexing (async on the runtime)."""
+        return await self._request(  # type: ignore[return-value]
+            "POST",
+            f"/knowledge_bases/{kb_id}/documents",
+            files={"file": (filename, data, content_type)},
+        )
+
+    async def delete_kb(self, kb_id: str) -> None:
+        """Drop a runtime KB; its documents and vectors go with it."""
+        await self._request("DELETE", f"/knowledge_bases/{kb_id}")
+
+    async def list_kb_documents(self, kb_id: str) -> list[dict]:
+        data = await self._request(
+            "GET", f"/knowledge_bases/{kb_id}/documents"
+        )
+        return data.get("documents", [])  # type: ignore[union-attr]
+
+    async def kb_document_status(self, kb_id: str) -> list[dict]:
+        data = await self._request(
+            "GET", f"/knowledge_bases/{kb_id}/documents/status"
+        )
+        return data.get("documents", [])  # type: ignore[union-attr]
+
+    async def search_kb(
+        self, kb_id: str, query: str, top_k: int = 5
+    ) -> list[dict]:
+        data = await self._request(
+            "POST",
+            f"/knowledge_bases/{kb_id}/search",
+            json={"query": query, "top_k": top_k},
+        )
+        return data.get("results", [])  # type: ignore[union-attr]
+
+    async def update_session_knowledge(
+        self, agent_id: str, session_id: str, kb_ids: list[str]
+    ) -> None:
+        """(Re)bind the session's RAG mount (§7.2: the stage's usable
+        KBs, already intersected with the sender's visibility)."""
+        await self._request(
+            "PATCH",
+            f"/sessions/{session_id}",
+            params={"agent_id": agent_id},
+            json={
+                "knowledge_config": {
+                    "knowledge_base_ids": kb_ids,
+                    "parameters": {},
+                }
+            },
         )
 
     # ---------- skills ----------

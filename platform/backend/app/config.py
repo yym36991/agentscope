@@ -36,6 +36,16 @@ class Settings(BaseSettings):
     # Chat model the platform binds onto every stage session (§8.6:
     # the credential lives under sys:runtime, end users stay zero-config).
     runtime_model: str = "glm-5.3"
+    # Per-stage model overrides on top of the platform default (§8.6
+    # chain: platform default -> agent blueprint). Keyed by stage key,
+    # e.g. PLATFORM_RUNTIME_STAGE_MODELS='{"budget":"glm-5.3"}'. Stages
+    # absent here use runtime_model.
+    runtime_stage_models: dict[str, str] = {}
+    # Embedding model for KB indexing/query (M3): used with the first
+    # openai_credential registered under sys:runtime (zhipu's
+    # OpenAI-compatible endpoint serves embedding-3 on the same key).
+    runtime_embedding_model: str = "embedding-3"
+    runtime_embedding_dimensions: int = 2048
     # Stage skill bundles the platform installs into an agent's
     # workspace partition when it opens the stage's first session
     # (subdir per stage, e.g. "testcases"; see services/flow.py).

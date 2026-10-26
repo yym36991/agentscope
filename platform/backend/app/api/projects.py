@@ -19,11 +19,14 @@ from app.api.deps import get_current_user
 from app.config import get_settings
 from app.db import get_db
 from app.models import (
+    ApprovalKind,
     ApprovalStatus,
     ApprovalTask,
     ArtifactFormat,
     ArtifactVersion,
+    ConsolidationDraft,
     Project,
+    ProjectArchive,
     ProjectMember,
     ProjectRole,
     ProjectStatus,
@@ -74,6 +77,7 @@ class StageRunOut(BaseModel):
     status: StageRunStatus
     round: int
     session_id: str | None
+    workspace_id: str | None
     created_at: str
 
     model_config = {"from_attributes": True}
@@ -87,6 +91,7 @@ class StageRunOut(BaseModel):
             status=run.status,
             round=run.round,
             session_id=run.session_id,
+            workspace_id=run.workspace_id,
             created_at=run.created_at.isoformat(),
         )
 
@@ -164,14 +169,17 @@ class DecideIn(BaseModel):
 
 class ApprovalOut(BaseModel):
     id: int
-    stage_run_id: int
+    kind: str = "stage"  # stage | consolidation (M4 §6.4)
+    stage_run_id: int | None = None
     project_id: int
     project_name: str
-    stage: StageKey
-    run_round: int
-    run_status: StageRunStatus
+    stage: StageKey | None = None
+    run_round: int | None = None
+    run_status: StageRunStatus | None = None
     status: ApprovalStatus
     comment: str | None
+    # Consolidation tasks: preview of the draft under review.
+    draft_head: str | None = None
 
 
 class MemberOut(BaseModel):
@@ -579,7 +587,9 @@ async def _relay_chat(
     """
     client = get_runtime_client()
     try:
-        session_id, agent_id = await flow.ensure_stage_session(db, run, project)
+        session_id, agent_id = await flow.ensure_stage_session(
+            db, run, project, user
+        )
         status = await client.get_session_status(agent_id, session_id)
         if status in ("awaiting_permission", "awaiting_external_result"):
             raise HTTPException(
@@ -596,7 +606,7 @@ async def _relay_chat(
                 f"{await flow.build_kickoff(db, run, project)}"
                 f"\n\n【用户开场补充】\n{message}"
             )
-        model = await client.default_chat_model_config()
+        model = await flow.stage_model_config(run.stage)
         if model is None:
             raise HTTPException(
                 status_code=503,
@@ -605,6 +615,17 @@ async def _relay_chat(
             )
         try:
             await client.update_session_model(agent_id, session_id, model)
+        except RuntimeCallError as exc:
+            if exc.status != 409:
+                raise
+        # RAG mount self-heal, same 409 tolerance as the model PATCH:
+        # links may change after the session opened, and the sender's
+        # visibility defines the current candidate set (§7.2).
+        try:
+            kb_ids = await flow.stage_kb_ids(db, project, run.stage, user)
+            await client.update_session_knowledge(
+                agent_id, session_id, kb_ids
+            )
         except RuntimeCallError as exc:
             if exc.status != 409:
                 raise
@@ -1242,6 +1263,81 @@ async def submit_workspace_file(
 
 # ---------- approvals ----------
 
+class ConsolidationOut(BaseModel):
+    """A consolidation draft plus its review status (§6.4)."""
+
+    id: int
+    content: str
+    approval_task_id: int | None
+    status: ApprovalStatus | None
+    created_at: str
+
+
+@router.get("/projects/{project_id}/archive")
+async def get_project_archive(
+    project_id: int,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """The project memory digest (§6.2 ②a) — exactly what kickoff
+    injects as 【项目档案摘要】."""
+    project = await _get_project_or_404(db, project_id, user)
+    archive = await db.scalar(
+        select(ProjectArchive).where(ProjectArchive.project_id == project.id)
+    )
+    return {
+        "project_id": project.id,
+        "summary": archive.summary if archive else None,
+        "generated_at": (
+            archive.generated_at.isoformat() if archive else None
+        ),
+    }
+
+
+@router.get(
+    "/projects/{project_id}/consolidations", response_model=list[ConsolidationOut]
+)
+async def list_consolidations(
+    project_id: int,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[ConsolidationOut]:
+    """Knowledge-consolidation drafts of the project, newest first."""
+    project = await _get_project_or_404(db, project_id, user)
+    drafts = (
+        await db.scalars(
+            select(ConsolidationDraft)
+            .where(ConsolidationDraft.project_id == project.id)
+            .order_by(ConsolidationDraft.id.desc())
+        )
+    ).all()
+    task_ids = {d.approval_task_id for d in drafts if d.approval_task_id}
+    tasks = (
+        {
+            t.id: t
+            for t in await db.scalars(
+                select(ApprovalTask).where(ApprovalTask.id.in_(task_ids))
+            )
+        }
+        if task_ids
+        else {}
+    )
+    return [
+        ConsolidationOut(
+            id=d.id,
+            content=d.content,
+            approval_task_id=d.approval_task_id,
+            status=(
+                tasks[d.approval_task_id].status
+                if d.approval_task_id in tasks
+                else None
+            ),
+            created_at=d.created_at.isoformat(),
+        )
+        for d in drafts
+    ]
+
+
 @router.get("/approvals/pending", response_model=list[ApprovalOut])
 async def pending_approvals(
     user: User = Depends(get_current_user),
@@ -1259,29 +1355,63 @@ async def pending_approvals(
         )
     ).all()
     # 审批中心是跨项目的收件箱：把项目名一并带出，免得前端再逐个查
+    project_ids = {
+        t.stage_run.project_id if t.kind == ApprovalKind.STAGE else t.project_id
+        for t in tasks
+        if (t.stage_run.project_id if t.kind == ApprovalKind.STAGE else t.project_id)
+        is not None
+    }
     project_names = dict(
         (
             await db.execute(
                 select(Project.id, Project.name).where(
-                    Project.id.in_({t.stage_run.project_id for t in tasks})
+                    Project.id.in_(project_ids)
                 )
             )
         ).all()
     )
-    return [
-        ApprovalOut(
-            id=t.id,
-            stage_run_id=t.stage_run_id,
-            project_id=t.stage_run.project_id,
-            project_name=project_names[t.stage_run.project_id],
-            stage=t.stage_run.stage,
-            run_round=t.stage_run.round,
-            run_status=t.stage_run.status,
-            status=t.status,
-            comment=t.comment,
+    drafts = {
+        d.approval_task_id: d
+        for d in await db.scalars(
+            select(ConsolidationDraft).where(
+                ConsolidationDraft.approval_task_id.in_(
+                    {t.id for t in tasks if t.kind == ApprovalKind.CONSOLIDATION}
+                )
+            )
         )
-        for t in tasks
-    ]
+    }
+    out: list[ApprovalOut] = []
+    for t in tasks:
+        if t.kind == ApprovalKind.CONSOLIDATION:
+            draft = drafts.get(t.id)
+            out.append(
+                ApprovalOut(
+                    id=t.id,
+                    kind="consolidation",
+                    project_id=t.project_id,  # type: ignore[arg-type]
+                    project_name=project_names.get(t.project_id, "?"),
+                    status=t.status,
+                    comment=t.comment,
+                    draft_head=(draft.content[:160] + "…") if draft and len(draft.content) > 160 else (draft.content if draft else None),
+                )
+            )
+            continue
+        run = t.stage_run
+        out.append(
+            ApprovalOut(
+                id=t.id,
+                kind="stage",
+                stage_run_id=t.stage_run_id,
+                project_id=run.project_id,
+                project_name=project_names[run.project_id],
+                stage=run.stage,
+                run_round=run.round,
+                run_status=run.status,
+                status=t.status,
+                comment=t.comment,
+            )
+        )
+    return out
 
 
 @router.post("/approvals/{task_id}/decide")
@@ -1298,6 +1428,25 @@ async def decide_approval(
         raise HTTPException(
             status_code=403, detail="only the assigned approver can decide"
         )
+    if task.kind == ApprovalKind.CONSOLIDATION:
+        draft = await db.scalar(
+            select(ConsolidationDraft).where(
+                ConsolidationDraft.approval_task_id == task.id
+            )
+        )
+        if draft is None:
+            raise HTTPException(
+                status_code=404, detail="consolidation draft not found"
+            )
+        project = await db.get(Project, task.project_id)
+        try:
+            result = await flow.decide_consolidation(
+                db, task, draft, project, payload.action, payload.comment
+            )
+        except FlowError as exc:
+            raise _flow_http(exc) from exc
+        return {"task_id": task.id, "action": payload.action,
+                "kind": "consolidation", **result}
     run = await db.get(StageRun, task.stage_run_id)
     project = await db.get(Project, run.project_id)
     try:

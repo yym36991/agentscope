@@ -15,6 +15,7 @@
 长期记忆）与上游示例保持一致。
 """
 import os
+import re
 import sys
 
 import uvicorn
@@ -61,6 +62,24 @@ if os.getenv("AMAP_API_KEY"):
         ),
     )
 
+# Price baseline served by the platform's L1 backend (architecture.md
+# §7.1 dual track): the budget agent queries exact rates/coefficients
+# from the structured price_items table instead of "recalling" numbers.
+# Read-only localhost endpoint; every stage agent gets the tool, only
+# the budget blueprint tells its agent to use it.
+default_mcps.append(
+    MCPClient(
+        name="price-baseline",
+        mcp_config=HttpMCPConfig(
+            url=os.getenv(
+                "AS_PRICE_MCP_URL",
+                "http://127.0.0.1:8100/mcp/price/",
+            ),
+        ),
+        is_stateful=False,
+    ),
+)
+
 # Durable storage in PostgreSQL — the database itself ("agentscope") is
 # created by start.sh; tables are provisioned automatically on startup.
 storage = AsyncSQLAlchemyStorage(
@@ -71,6 +90,39 @@ storage = AsyncSQLAlchemyStorage(
 )
 
 vector_store = QdrantStore(location=":memory:")
+
+
+# L1 编排层为每个阶段会话显式传入的共享工作区 id（architecture.md
+# §8.5：文档类阶段 proj-{id} 共享，测试阶段 test-run-{run_id} 沙箱）。
+_SHARED_WORKSPACE_RE = re.compile(r"^(proj-\d+|test-run-\d+)$")
+
+
+class ProjectWorkspaceManager(LocalWorkspaceManager):
+    """共享工作区 id 的目录按 id 本身确定，而非按智能体。
+
+    上游 LocalWorkspaceManager 的 workdir 恒为 ``basedir/agent_id``，
+    缓存才按 workspace_id 键——同一 ``proj-19`` 只有恰好命中缓存时才
+    真正共享目录；重启或 TTL 逐出后，下一个解析该 id 的阶段智能体会
+    拿到自己名下的另一个目录，跨阶段文件与项目记忆会静默断裂。
+    平台显式传入的 id 必须目录确定：把 id 当 agent_id 委托给父类，
+    workdir 即 ``basedir/{workspace_id}``；未命中正则的（默认铸造的
+    UUID/哈希 id）保持上游行为 ``basedir/agent_id`` 不变。
+    """
+
+    async def get_workspace(
+        self,
+        user_id: str,
+        agent_id: str,
+        session_id: str,
+        workspace_id: str | None = None,
+    ):
+        if workspace_id and _SHARED_WORKSPACE_RE.match(workspace_id):
+            return await super().get_workspace(
+                user_id, workspace_id, session_id, workspace_id
+            )
+        return await super().get_workspace(
+            user_id, agent_id, session_id, workspace_id
+        )
 
 
 async def longterm_memory_factory(
@@ -101,7 +153,7 @@ app = create_app(
     # Stable download-URL signing secret: survives restarts and would be
     # shared by every instance behind a load balancer.
     download_secret=os.getenv("AS_DOWNLOAD_SECRET", "dev-only-download-secret"),
-    workspace_manager=LocalWorkspaceManager(
+    workspace_manager=ProjectWorkspaceManager(
         basedir=os.path.join(
             os.path.dirname(os.path.abspath(__file__)),
             "workspaces",

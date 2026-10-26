@@ -295,6 +295,8 @@ users ──< group_members >── groups
    → 此后所有该组的新项目在 RAG 检索中受益
 ```
 
+> **M4 已实现（2026-10-26）**：`project_archives`（项目档案，§6.2 ②a）+ `consolidation_drafts` 两表，`approval_tasks` 加 `kind`（stage/consolidation）与可空 `stage_run_id`（迁移 `d4e8b1c60a79`）。档案摘要为**确定性生成**（每次阶段审批后由已批准产物刷新，不依赖 LLM——"权威交接依据"不赌模型可用性），kickoff 第一层注入【项目档案摘要】（§6.3）。沉淀流程：验收审批通过 → 后台任务调用第 7 个智能体「知识沉淀」（seed 同步维护）起草 → 失败回退档案摘要 → 生成 consolidation 审批任务 → 批准后自动写入属主组的沉淀库（`kb_type=distill`，组库自动创建；无向量化凭证时降级为产物目录存档，凭证就绪后可重入库）。`AgenticMemoryMiddleware` 运行时已挂载，已验证会随阶段交付自主沉淀项目记忆（演练中同一项目记忆文件相继记录了 PRD V1.0、按退回意见修订的功能点明细 V2.0 与查准费率的估算表 V1.0，含 Why/How-to-apply）。物理粒度取决于 workspace 目录解析（§8.5 注记）：上游 LocalWorkspaceManager 的 workdir 恒为 `workspaces/{agent_id}`、仅缓存按 workspace_id 键，共享 id 的目录随重启/TTL 漂移；运行时服务已加 `ProjectWorkspaceManager`（examples/platform_agent_service/main.py）把 `proj-{id}`/`test-run-{id}` 钉死到 `workspaces/{workspace_id}`——项目文件与 Memory/ 从此按项目确定，测试沙箱也真正按 run 隔离（此前所有项目的测试 run 共享测试智能体目录）。验证：`scripts/verify_workspace.py`（proj-{id} 目录落盘断言）+ `scripts/walkthrough.py` 结尾断言（退回轮 kickoff 含档案摘要、沉淀任务出现、草稿审批、入库结果）。
+
 沉淀库与案例库的分离：案例库（结构化项目档案检索）服务预算阶段找相似项目；沉淀库（经验教训）服务全阶段。
 
 ---
@@ -325,6 +327,8 @@ users ──< group_members >── groups
 - **先过滤、后检索**（authorization-aware RAG）：权限不通过的知识库根本不进入检索候选，而不是检索完再过滤（防泄漏 + 省算力）
 - AgentScope 侧每个 KB 物理独立一个向量集合（`CollectionPerKbManager`，`kb_<uuid>`），天然按库隔离
 - 文档上传/删除 = write 权限，仅授予管理组
+
+> **M3 已实现（2026-10-26）**：`kbs/kb_grants/project_kb_links/price_items` 四表（迁移 `c7d2e5f81a63`）；KB CRUD/授权/文档代理/检索代理与项目绑定走 `app/api/kbs.py`（可见性判定 = 组授权 ∩ 项目阶段绑定，管理员全见，写权限校验在上传代理）；会话挂载经 `create_session(knowledge_config)` + 每次聊天自愈 PATCH（`flow.stage_kb_ids`）。价格基准走 §7.1 双轨的"工具"侧：`price_items` 结构化表 + L1 挂载的 fastmcp 服务（`/mcp/price/`，工具 `query_price_baseline`/`list_price_types`），运行时经 `default_mcps` 以 streamable-http 消费，预算智能体提示词明确"费率必须查工具、不得凭记忆报价"；管理员 CSV/XLSX 导入接口按 (region, effective_year) 整体替换。验证：`scripts/verify_m3.py` 十个用例（含跨组 403、非管理员导入 403、MCP 精确返回导入值、无凭证创建 KB 优雅 503 零落库）。**待办**：向量化 credential（sys:runtime 名下 openai 类型）由管理员注册后，KB 实建/文档上传/RAG 挂载的真实链路即通——编排层与授权逻辑已就绪。
 
 ---
 
@@ -435,7 +439,7 @@ project-workspace/
 
 - 智能体用内置 Write/Edit 工具写文件（前端已有对应渲染器，体验成熟）
 - 提交送审时编排层经 `/workspace/files` 拉取快照存入 `artifact_versions`（版本定格，后续修改不影响已审版本）
-- 已核实（v0.6）：`POST /sessions/` **支持显式指定 `workspace_id`**（显式值优先于隔离策略的自动分配）——**`artifact_versions` 才是权威归档，workspace 只是工作区**，丢了可从归档恢复。M1 现状：L1 尚未传 workspace_id，运行时按默认 PER_AGENT 隔离——同一阶段智能体的全部会话（含跨项目）共享一个 workspace，项目级隔离靠 session 边界 + 编排层网关兜底；下方 v0.3 的按项目/阶段运行分配规则待实现
+- 已核实（v0.6）：`POST /sessions/` **支持显式指定 `workspace_id`**（显式值优先于隔离策略的自动分配）——**`artifact_versions` 才是权威归档，workspace 只是工作区**，丢了可从归档恢复。M2 已实现：`ensure_stage_session` 为每个会话传显式 workspace_id（映射规则见下），`stage_runs.workspace_id` 落库留痕；会话创建经 PG 后端核实每次必新建，退回修改开新 run 新 session 与项目共享 workspace 不冲突。**落盘粒度（M2 验收时发现并修复）**：上游 LocalWorkspaceManager 的 workdir 恒为 `workspaces/{agent_id}`，缓存才按 workspace_id 键——共享 `proj-{id}` 只在命中缓存时真正同目录，重启或 TTL 逐出后会被静默解析到另一智能体的目录（走查中表现为跨阶段文件可读、记忆全落第一个智能体名下）。运行时服务以 `ProjectWorkspaceManager` 修正：显式的 `proj-{id}`/`test-run-{id}` 一律映射 `workspaces/{workspace_id}`（默认铸造 id 的行为不变），`scripts/verify_workspace.py` 断言落盘
 - **会话粒度 = stage_run（v0.6 修正，推翻 v0.2 的“同一阶段会话唯一、退回天然续用”）**：每个 run 一个新 session，退回修改开新 session——重做从干净上下文开始，退回意见由 kickoff 注入，草稿留在共享 workspace；旧论述依据的“(主体, 智能体, workspace) 三元组约束”在运行时存储层并不存在（`upsert_session` 不带 session_id 时每次必新建，Redis/PG 两后端行为一致；上游路由文档字符串的“三元组唯一”说法与实现不符）；“大版本重开”同样是新 run 新 session（引入项目版本 v+1 时配合新 workspace，见下）
 - **workspace 按阶段分配（v0.3 统一规则）**：文档类阶段 = `proj-{project_id}`（项目版本重开时 v+1）；测试阶段 = `test-run-{stage_run_id}`（专用沙箱，见下）——workspace_id 由 L1 写入 `stage_runs` 映射表
 
@@ -623,6 +627,8 @@ v0.3 决策：**目标形态直接定为多实例**（§13.1 #12）——按多�
 | M3 知识库 | KB 组授权 + 阶段绑定 + RAG 挂载 + 价格基准结构化查询工具 | 权限用例通过；预算智能体能查准费率 |
 | M4 记忆与沉淀 | 项目档案表 + AgenticMemoryMiddleware + 沉淀流程 | 跨阶段交接引用上游结论；沉淀入库可检索 |
 | M5 部署形态 | 多实例（Redis 总线/PG 存储/LB 配置）+ 内网离线包 + 导出服务 | 双形态部署演练通过 |
+
+> **实施状态（2026-10-26）**：M1 ✅；M2 ✅（六阶段 + 退回重开新会话共享工作区 + kickoff 注入上游产物与退回意见，`scripts/walkthrough.py` 端到端走通：项目 #19 全六阶段 + 退回重做 + 测试沙箱隔离，13 分钟）；M3 ✅ 后端与验收用例（§7.2 注记，`scripts/verify_m3.py` 十用例；走查中预算智能体实调 price-baseline MCP 7 次查准费率，含"北京无生产率基准→自动回退全国基准"的空结果恢复；真实 RAG 挂载待管理员注册向量化 credential）；M4 ✅（§6.4 注记；沉淀草稿 2353 字走完审批，入库按设计降级存档，凭证就绪后可入库）。M5 未开始。前端仅覆盖既有两视图，KB 管理/沉淀审批页面待后续迭代。运行时工作区目录已按项目钉死（§8.5 注记，ProjectWorkspaceManager）。
 
 M1 期间并行敲定 §13 的决策清单。
 
