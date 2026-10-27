@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.api import auth, hubs, kbs, projects, routes
+from app.api import auth, hubs, kbs, org, projects, routes, stats, trace
 from app import mcp_server
 
 
@@ -40,6 +40,9 @@ def create_app() -> FastAPI:
     app.include_router(projects.router)
     app.include_router(kbs.router)
     app.include_router(hubs.router)
+    app.include_router(stats.router)
+    app.include_router(org.router)
+    app.include_router(trace.router)
     price_mcp_app = mcp_server.mcp.http_app(path="/")
     app.state.price_mcp_app = price_mcp_app
     # http://<host>:<port>/mcp/price/ — streamable-http endpoint the

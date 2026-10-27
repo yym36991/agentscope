@@ -21,6 +21,13 @@ from app.models.stage import (
     StageRun,
     StageRunStatus,
 )
+from app.models.trace import (
+    FpCategory,
+    FunctionPoint,
+    TraceBudgetRow,
+    TraceRequirement,
+    TraceTestCase,
+)
 
 __all__ = [
     "Base",
@@ -48,4 +55,9 @@ __all__ = [
     "ArtifactVersion",
     "StageRun",
     "StageRunStatus",
+    "FpCategory",
+    "FunctionPoint",
+    "TraceBudgetRow",
+    "TraceRequirement",
+    "TraceTestCase",
 ]

@@ -27,6 +27,8 @@ import {
 	STAGE_STATE_TEXT,
 	computeStageStates,
 } from '@/components/platform/StageStepper';
+import { StageGantt } from '@/components/platform/StageGantt';
+import { TraceMatrix } from '@/components/platform/TraceMatrix';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -263,6 +265,34 @@ export function ProjectDetailPage() {
 								</div>
 							))}
 						</div>
+					</CardContent>
+				</Card>
+
+				{/* 阶段甘特视图：每阶段一条横条（首轮创建 → 审批决定），标注轮次与退回 */}
+				{(runs.data ?? []).length > 0 && (
+					<Card>
+						<CardHeader>
+							<CardTitle className="text-base">进度甘特</CardTitle>
+							<CardDescription>
+								每阶段一条：从首轮运行创建画到审批决定，未收尾的画到当前时间（浅色）。
+							</CardDescription>
+						</CardHeader>
+						<CardContent>
+							<StageGantt runs={runs.data ?? []} />
+						</CardContent>
+					</Card>
+				)}
+
+				{/* 功能点与追溯矩阵（§7.3）：需求 → 功能点 → 用例 → 工时贯通 */}
+				<Card>
+					<CardHeader>
+						<CardTitle className="text-base">功能点与追溯</CardTitle>
+						<CardDescription>
+							需求 → 功能点 → 测试用例 → 工时报价的贯通视图，取各阶段最新已批准轮次的结构化侧表。
+						</CardDescription>
+					</CardHeader>
+					<CardContent>
+						<TraceMatrix projectId={pid} />
 					</CardContent>
 				</Card>
 

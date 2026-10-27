@@ -95,6 +95,8 @@ export interface StageRunOut {
 	round: number;
 	session_id: string | null;
 	created_at: string;
+	/** 最新一次审批决定时间：甘特条右端点（未决定为 null） */
+	decided_at?: string | null;
 	warning?: string | null;
 }
 
@@ -235,6 +237,92 @@ export interface PriceItemOut {
 	effective_year: number;
 	source: string;
 	notes: string;
+}
+
+// ---------- 管理视图：统计看板 / 意见台账 / 组织管理 ----------
+
+export const PROJECT_STATUS_LABELS: Record<string, string> = {
+	draft: '草稿',
+	active: '进行中',
+	accepted: '已验收',
+	archived: '已归档',
+};
+
+export interface StageStatOut {
+	stage: string;
+	runs: number;
+	approved: number;
+	returned: number;
+	/** 首轮创建 → 审批决定的平均小时数（无已通过运行则 null） */
+	avg_hours: number | null;
+	avg_rounds: number | null;
+	return_rate: number;
+}
+
+export interface StatsOut {
+	projects_total: number;
+	projects_by_status: Record<string, number>;
+	stages: StageStatOut[];
+	approvals: { approved: number; returned: number; pending: number };
+	price: { items: number; regions: number; by_type: Record<string, number> };
+}
+
+export interface FeedbackOut {
+	id: number;
+	project_id: number;
+	project_name: string | null;
+	/** stage = 阶段审批意见，consolidation = 知识沉淀审阅意见 */
+	kind: string;
+	stage: string | null;
+	run_round: number | null;
+	action: 'approved' | 'returned';
+	comment: string;
+	approver: string;
+	decided_at: string;
+}
+
+export interface AdminUserOut {
+	id: number;
+	username: string;
+	display_name: string;
+	role: 'admin' | 'member';
+	is_active: boolean;
+	groups: GroupOut[];
+}
+
+// ---------- 追溯矩阵（§7.3） ----------
+
+export interface TraceReqRow {
+	req_id: string;
+	title: string;
+	summary: string;
+}
+
+export interface TraceFpRow {
+	fp_id: string;
+	name: string;
+	category: 'ILF' | 'EIF' | 'EI' | 'EO' | 'EQ';
+	complexity: string | null;
+	fr_refs: string[];
+	/** NESMA 估算功能点法类别权重（L1 侧定价） */
+	weight: number;
+	hours: number | null;
+}
+
+export interface TraceTcRow {
+	tc_id: string;
+	title: string;
+	fp_refs: string[];
+}
+
+export interface TraceOut {
+	requirements: TraceReqRow[];
+	function_points: TraceFpRow[];
+	test_cases: TraceTcRow[];
+	ufp: number;
+	hours_total: number | null;
+	/** stage → 产出该切片的最新已批准 run id */
+	produced_at: Record<string, number>;
 }
 
 // ---------- resource hubs ----------
@@ -448,6 +536,29 @@ export const api = {
 	listSkillLibrary: () => request<SkillLibItem[]>('/skill-library'),
 	deleteSkill: (skillId: string) =>
 		request<void>(`/skill-library/${encodeURIComponent(skillId)}`, 'DELETE'),
+
+	// ---------- 管理视图 ----------
+	getStats: () => request<StatsOut>('/stats'),
+	listFeedback: (filters: { project_id?: number; action?: string; q?: string }) => {
+		const q = new URLSearchParams();
+		if (filters.project_id) q.set('project_id', String(filters.project_id));
+		if (filters.action) q.set('action', filters.action);
+		if (filters.q) q.set('q', filters.q);
+		const qs = q.toString();
+		return request<FeedbackOut[]>(`/feedback${qs ? `?${qs}` : ''}`);
+	},
+	listAdminUsers: () => request<AdminUserOut[]>('/admin/users'),
+	updateAdminUser: (
+		id: number,
+		patch: { display_name?: string; role?: 'admin' | 'member'; is_active?: boolean },
+	) => request<AdminUserOut>(`/admin/users/${id}`, 'PATCH', patch),
+	setUserGroups: (id: number, groupIds: number[]) =>
+		request<AdminUserOut>(`/admin/users/${id}/groups`, 'PUT', { group_ids: groupIds }),
+	createGroup: (name: string) => request<GroupOut>('/groups', 'POST', { name }),
+	renameGroup: (id: number, name: string) =>
+		request<GroupOut>(`/groups/${id}`, 'PATCH', { name }),
+	deleteGroup: (id: number) => request<void>(`/groups/${id}`, 'DELETE'),
+	getTrace: (projectId: number) => request<TraceOut>(`/projects/${projectId}/trace`),
 };
 
 /** Asking tool calls of a message, for the HITL confirm bar. */

@@ -5,7 +5,6 @@ All stage/project transitions live here so the API layer stays thin and
 the rules have exactly one implementation. Illegal transitions raise
 :class:`FlowError`, which the API layer maps to HTTP 409/400.
 """
-from datetime import datetime, timezone
 from pathlib import Path
 import asyncio
 import logging
@@ -39,6 +38,7 @@ from app.models import (
     User,
 )
 from app.runtime_client import RuntimeCallError, RuntimeClient, get_runtime_client
+from app.services.trace import ingest_trace_tables
 
 logger = logging.getLogger(__name__)
 
@@ -602,7 +602,9 @@ async def decide_consolidation(
     """
     if task.status != ApprovalStatus.PENDING:
         raise FlowError(409, f"task #{task.id} is already {task.status.value}")
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    # decided_at 用数据库时钟：server_default now() 走 PG 会话时区
+    # (Asia/Shanghai)，Python 侧 utcnow 会与之相差 8 小时。
+    now = func.now()
     if action == "approve":
         task.status = ApprovalStatus.APPROVED
         task.decided_at = now
@@ -855,7 +857,9 @@ async def decide(
             f"run #{run.id} is {run.status.value}, expected under_review",
         )
 
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    # decided_at 用数据库时钟：server_default now() 走 PG 会话时区
+    # (Asia/Shanghai)，Python 侧 utcnow 会与之相差 8 小时。
+    now = func.now()
     accepted = False
     if action == "approve":
         task.status = ApprovalStatus.APPROVED
@@ -874,6 +878,16 @@ async def decide(
             logger.warning(
                 "project archive refresh failed (artifacts on disk?)",
                 exc_info=True,
+            )
+        # §7.3: harvest the run's structured side-table into the trace
+        # matrix. Best effort — never fails the approval itself.
+        try:
+            await ingest_trace_tables(
+                db, run, agent_id=await resolve_stage_agent(run.stage)
+            )
+        except Exception:
+            logger.warning(
+                "trace ingestion failed for run #%s", run.id, exc_info=True
             )
     elif action == "return":
         if not comment:

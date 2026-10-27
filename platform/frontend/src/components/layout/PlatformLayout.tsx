@@ -1,10 +1,13 @@
 import { useQuery } from '@tanstack/react-query';
 import {
+	BarChart3,
 	Boxes,
 	ClipboardCheck,
 	FolderKanban,
 	LogOut,
+	MessageSquareText,
 	Store,
+	Users,
 	Wand2,
 } from 'lucide-react';
 import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
@@ -64,6 +67,17 @@ export function PlatformLayout() {
 						</span>
 					)}
 				</NavLink>
+				<NavLink to="/stats" className={itemCls}>
+					<BarChart3 className="size-4" /> 统计看板
+				</NavLink>
+				<NavLink to="/feedback" className={itemCls}>
+					<MessageSquareText className="size-4" /> 意见台账
+				</NavLink>
+				{user?.role === 'admin' && (
+					<NavLink to="/org" className={itemCls}>
+						<Users className="size-4" /> 组织管理
+					</NavLink>
+				)}
 
 				<p className="px-3 pb-1 pt-4 text-[11px] font-medium tracking-wide text-muted-foreground/70">
 					资源中心

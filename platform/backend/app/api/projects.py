@@ -6,12 +6,13 @@ app/services/flow.py (single implementation, §5).
 """
 import base64
 import io
+from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -79,11 +80,15 @@ class StageRunOut(BaseModel):
     session_id: str | None
     workspace_id: str | None
     created_at: str
+    # 最新一次审批决定的时间：甘特条右端点（未决定则 None）
+    decided_at: str | None = None
 
     model_config = {"from_attributes": True}
 
     @classmethod
-    def from_run(cls, run: StageRun) -> "StageRunOut":
+    def from_run(
+        cls, run: StageRun, decided_at: datetime | None = None
+    ) -> "StageRunOut":
         return cls(
             id=run.id,
             project_id=run.project_id,
@@ -93,6 +98,7 @@ class StageRunOut(BaseModel):
             session_id=run.session_id,
             workspace_id=run.workspace_id,
             created_at=run.created_at.isoformat(),
+            decided_at=decided_at.isoformat() if decided_at else None,
         )
 
 
@@ -452,7 +458,23 @@ async def list_stage_runs(
             .order_by(StageRun.id)
         )
     ).all()
-    return [StageRunOut.from_run(r) for r in runs]
+    decided: dict[int, datetime] = {}
+    if runs:
+        rows = await db.execute(
+            select(
+                ApprovalTask.stage_run_id,
+                func.max(ApprovalTask.decided_at),
+            )
+            .where(
+                ApprovalTask.stage_run_id.in_([r.id for r in runs]),
+                ApprovalTask.decided_at.is_not(None),
+            )
+            .group_by(ApprovalTask.stage_run_id)
+        )
+        decided = dict(rows.all())
+    return [
+        StageRunOut.from_run(r, decided_at=decided.get(r.id)) for r in runs
+    ]
 
 
 @router.post(

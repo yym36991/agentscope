@@ -8,8 +8,11 @@ import { queryClient } from '@/lib/query-client';
 import { AuthProvider, useAuth } from '@/auth';
 import { ApprovalsPage } from '@/pages/Approvals';
 import { LoginPage } from '@/pages/Login';
+import { OrgPage } from '@/pages/Org';
 import { ProjectDetailPage } from '@/pages/ProjectDetail';
 import { ProjectsPage } from '@/pages/Projects';
+import { StatsPage } from '@/pages/Stats';
+import { FeedbackPage } from '@/pages/Feedback';
 import { WorkbenchPage } from '@/pages/Workbench';
 import { KnowledgeBasesPage } from '@/pages/resources/KnowledgeBases';
 import { McpHubPage, SkillHubPage } from '@/pages/resources/Hubs';
@@ -37,6 +40,9 @@ const router = createBrowserRouter([
 			{ index: true, element: <Navigate to="/projects" replace /> },
 			{ path: '/projects', element: <ProjectsPage /> },
 			{ path: '/approvals', element: <ApprovalsPage /> },
+			{ path: '/stats', element: <StatsPage /> },
+			{ path: '/feedback', element: <FeedbackPage /> },
+			{ path: '/org', element: <OrgPage /> },
 			{ path: '/resources/kb', element: <KnowledgeBasesPage /> },
 			{ path: '/resources/mcp', element: <McpHubPage /> },
 			{ path: '/resources/skills', element: <SkillHubPage /> },

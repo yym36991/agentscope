@@ -330,7 +330,20 @@ users ──< group_members >── groups
 
 > **M3 已实现（2026-10-26）**：`kbs/kb_grants/project_kb_links/price_items` 四表（迁移 `c7d2e5f81a63`）；KB CRUD/授权/文档代理/检索代理与项目绑定走 `app/api/kbs.py`（可见性判定 = 组授权 ∩ 项目阶段绑定，管理员全见，写权限校验在上传代理）；会话挂载经 `create_session(knowledge_config)` + 每次聊天自愈 PATCH（`flow.stage_kb_ids`）。价格基准走 §7.1 双轨的"工具"侧：`price_items` 结构化表 + L1 挂载的 fastmcp 服务（`/mcp/price/`，工具 `query_price_baseline`/`list_price_types`），运行时经 `default_mcps` 以 streamable-http 消费，预算智能体提示词明确"费率必须查工具、不得凭记忆报价"；管理员 CSV/XLSX 导入接口按 (region, effective_year) 整体替换。验证：`scripts/verify_m3.py` 十个用例（含跨组 403、非管理员导入 403、MCP 精确返回导入值、无凭证创建 KB 优雅 503 零落库）。**待办**：向量化 credential（sys:runtime 名下 openai 类型）由管理员注册后，KB 实建/文档上传/RAG 挂载的真实链路即通——编排层与授权逻辑已就绪。
 
+### 7.3 追溯矩阵：需求 → 功能点 → 测试用例 → 报价（v0.5 新增）
+
+造价交付要回答"这笔钱对应哪些需求、哪些功能点、哪条用例验证"——靠事后翻文档拼不出来，所以在产物链旁边铺一条**结构化侧表**轨道：
+
+- **写入（提示词契约）**：四个文档阶段智能体在产出人读文档（PRD / 功能点明细 / 测试用例说明书 / 估算表）之外，额外往工作区根目录写一份机器可读 JSON 数组——`req-table.json`（id/title/summary）、`fp-table.json`（id/name/category/complexity/fr_refs）、`tc-table.json`（id/title/fp_refs）、`budget-table.json`（fp_id/hours）。FR-xx / FP-xx / TC-xx 编号是提示词层的**附加约定**，不约束用户需求文档本身的格式。
+- **入库（审批钩子，best-effort）**：`flow.decide` 的 approve 分支在刷新项目档案后调 `ingest_trace_tables`，从运行工作区收割侧表入 `trace_requirements / function_points / trace_test_cases / trace_budget_rows` 四表（迁移 `e8f3c2a1b7d9`），键 = stage_run_id。缺文件 / 坏 JSON 只记 warning，**永不阻断审批**；只有已批准数据入库，历史轮次按 run 留表、读侧取每阶段最新已批准轮次。
+- **定价（agents classify, platform prices）**：NESMA **估算功能点法**权重由 L1 统一给定（ILF=7 / EIF=5 / EI=4 / EO=5 / EQ=4），智能体只负责分类，复杂度仅作参考不参与加权——数字必须可审计，不让模型报价。预算智能体的默认口径已同步从预估功能点法（35×ILF+15×EIF）改为估算功能点法，与矩阵同源。
+- **读侧**：`GET /projects/{id}/trace` 聚合出贯通矩阵（UFP=Σ权重、工时合计、各切片产出的 run id），前端项目详情页「功能点与追溯」卡渲染。
+
+为什么侧表而不是解析产物文档：文档格式随用户要求变化（CSV/MD/docx 结构不稳定），解析链脆弱；侧表是提示词契约的一部分，字段固定、逐轮可校验，且与"审批通过才入库"的口径天然对齐。
+
 ---
+
+## 8. AgentScope 集成设计
 
 ## 8. AgentScope 集成设计
 
@@ -629,6 +642,8 @@ v0.3 决策：**目标形态直接定为多实例**（§13.1 #12）——按多�
 | M5 部署形态 | 多实例（Redis 总线/PG 存储/LB 配置）+ 内网离线包 + 导出服务 | 双形态部署演练通过 |
 
 > **实施状态（2026-10-26）**：M1 ✅；M2 ✅（六阶段 + 退回重开新会话共享工作区 + kickoff 注入上游产物与退回意见，`scripts/walkthrough.py` 端到端走通：项目 #19 全六阶段 + 退回重做 + 测试沙箱隔离，13 分钟）；M3 ✅ 后端与验收用例（§7.2 注记，`scripts/verify_m3.py` 十用例；走查中预算智能体实调 price-baseline MCP 7 次查准费率，含"北京无生产率基准→自动回退全国基准"的空结果恢复；真实 RAG 挂载待管理员注册向量化 credential）；M4 ✅（§6.4 注记；沉淀草稿 2353 字走完审批，入库按设计降级存档，凭证就绪后可入库）。M5 未开始。前端仅覆盖既有两视图，KB 管理/沉淀审批页面待后续迭代。运行时工作区目录已按项目钉死（§8.5 注记，ProjectWorkspaceManager）。
+>
+> **管理视图批次（2026-10-27，v0.5）**：对标主流项目管理软件补齐 PM 能力——统计看板（`GET /stats`：项目状态分布 / 各阶段平均耗时与轮次 / 退回率 / 审批通过率 / 价格基准覆盖）、意见台账（`GET /feedback`：通过 + 退回意见跨项目聚合，双路径 join 规避 stage 审批任务 project_id 为空的坑）、组织管理页（§13 决策 5 的 UI 闭环：小组 CRUD + 成员部门调整，管理员）、项目甘特视图（每阶段一条：首轮创建 → 审批决定，标注轮次与退回）、追溯矩阵（§7.3）。可见性口径：管理员全见，成员 = owner ∪ 成员。附带修复：`decided_at` 时区统一改走数据库时钟（此前 Python UTC 与 PG 会话时区相差 8 小时，历史数据已回填 +8h）。
 
 M1 期间并行敲定 §13 的决策清单。
 
