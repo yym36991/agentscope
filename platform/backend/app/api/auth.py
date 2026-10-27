@@ -43,6 +43,9 @@ class UserOut(BaseModel):
     username: str
     display_name: str
     groups: list[str]
+    # Frontend needs it to show admin-only affordances (KB grants,
+    # hub installs). Roles are not secret — they gate server-side too.
+    role: str = "member"
 
     model_config = {"from_attributes": True}
 

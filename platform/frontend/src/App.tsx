@@ -11,6 +11,9 @@ import { LoginPage } from '@/pages/Login';
 import { ProjectDetailPage } from '@/pages/ProjectDetail';
 import { ProjectsPage } from '@/pages/Projects';
 import { WorkbenchPage } from '@/pages/Workbench';
+import { KnowledgeBasesPage } from '@/pages/resources/KnowledgeBases';
+import { McpHubPage, SkillHubPage } from '@/pages/resources/Hubs';
+import { PriceBaselinePage } from '@/pages/resources/PriceBaseline';
 
 /** Gate for authenticated routes: waits for the auth probe, then decides. */
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -34,6 +37,10 @@ const router = createBrowserRouter([
 			{ index: true, element: <Navigate to="/projects" replace /> },
 			{ path: '/projects', element: <ProjectsPage /> },
 			{ path: '/approvals', element: <ApprovalsPage /> },
+			{ path: '/resources/kb', element: <KnowledgeBasesPage /> },
+			{ path: '/resources/mcp', element: <McpHubPage /> },
+			{ path: '/resources/skills', element: <SkillHubPage /> },
+			{ path: '/resources/price', element: <PriceBaselinePage /> },
 			{
 				path: '/projects/:projectId',
 				errorElement: <RouteError />,

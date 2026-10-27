@@ -130,6 +130,22 @@ class PriceImportOut(BaseModel):
 
 # ---------- helpers ----------
 
+class GroupOut(BaseModel):
+    id: int
+    name: str
+
+
+@router.get("/groups", response_model=list[GroupOut])
+async def list_groups(
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> list[GroupOut]:
+    """All groups, for the admin grants editor (users join groups
+    themselves; the platform does not manage memberships yet)."""
+    _require_admin(user)
+    rows = await db.execute(select(Group).order_by(Group.name))
+    return [GroupOut(id=g.id, name=g.name) for g in rows.scalars()]
+
 def _require_admin(user: User) -> None:
     if user.role != PlatformRole.ADMIN:
         raise HTTPException(

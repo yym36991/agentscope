@@ -5,6 +5,7 @@ import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
 
 import { api, STAGE_LABELS } from '@/api/platform';
+import { StageProgressDots, approxStageStates } from '@/components/platform/StageStepper';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -103,16 +104,24 @@ export function ProjectsPage() {
 					{projects.data?.map((p) => (
 						<Link key={p.id} to={`/projects/${p.id}`}>
 							<Card className="py-4 transition-colors hover:bg-muted/50">
-								<CardContent className="flex items-center justify-between px-4 py-0">
-									<div>
-										<div className="font-medium">{p.name}</div>
-										<div className="mt-1 text-xs text-muted-foreground">
-											当前阶段：{STAGE_LABELS[p.current_stage] ?? p.current_stage}
-										</div>
+								<CardContent className="space-y-1.5 px-4 py-0">
+									<div className="flex items-center justify-between gap-2">
+										<span className="min-w-0 truncate font-medium">{p.name}</span>
+										<Badge variant={p.status === 'active' ? 'default' : 'secondary'}>
+											{STATUS_LABELS[p.status] ?? p.status}
+										</Badge>
 									</div>
-									<Badge variant={p.status === 'active' ? 'default' : 'secondary'}>
-										{STATUS_LABELS[p.status] ?? p.status}
-									</Badge>
+									<div className="flex items-center gap-2 text-xs text-muted-foreground">
+										<StageProgressDots states={approxStageStates(p)} />
+										<span>
+											{p.current_stage === 'none'
+												? '未开始'
+												: `当前阶段：${STAGE_LABELS[p.current_stage] ?? p.current_stage}`}
+										</span>
+										<span className="ml-auto shrink-0">
+											{new Date(p.created_at).toLocaleDateString()}
+										</span>
+									</div>
 								</CardContent>
 							</Card>
 						</Link>

@@ -1,9 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
 	ArrowLeft,
-	CheckCircle2,
-	Circle,
-	CircleDotDashed,
+	Boxes,
 	Loader2,
 	MessagesSquare,
 	Play,
@@ -14,12 +12,39 @@ import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { toast } from 'sonner';
 
-import { api, ROLE_LABELS, STAGE_LABELS, STAGE_ORDER, type ApprovalOut } from '@/api/platform';
+import {
+	api,
+	KB_TYPE_LABELS,
+	ROLE_LABELS,
+	STAGE_LABELS,
+	STAGE_ORDER,
+	type ApprovalOut,
+} from '@/api/platform';
 import { useAuth } from '@/auth';
 import { ApprovalDecideDialog } from '@/components/approval/ApprovalDecideDialog';
+import {
+	StageTimeline,
+	STAGE_STATE_TEXT,
+	computeStageStates,
+} from '@/components/platform/StageStepper';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+	Card,
+	CardContent,
+	CardDescription,
+	CardHeader,
+	CardTitle,
+} from '@/components/ui/card';
+import {
+	Dialog,
+	DialogClose,
+	DialogContent,
+	DialogDescription,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
@@ -37,7 +62,8 @@ const RUN_STATUS: Record<string, string> = {
 	returned: '已退回',
 };
 
-/** 视图 A 核心：项目生命周期（阶段时间线 + 运行 + 成员 + 审批）。 */
+/** 视图 A 核心：项目生命周期（时间线 + 选中阶段的运行 + 成员 + 审批 + 知识库绑定）。
+ * 六阶段全流程只在页面顶部出现一次；项目列表与工作台左栏用迷你进度点。 */
 export function ProjectDetailPage() {
 	const { projectId } = useParams();
 	const pid = Number(projectId);
@@ -56,6 +82,8 @@ export function ProjectDetailPage() {
 
 	const [starting, setStarting] = useState<string | null>(null);
 	const [decideTask, setDecideTask] = useState<ApprovalOut | null>(null);
+	// 时间线选中阶段（必须在早退 return 之前：hooks 数量不能随加载状态变化）
+	const [selectedStage, setSelectedStage] = useState<string | null>(null);
 
 	// 成员管理：只有负责人能增删，其余成员只读
 	const members = useQuery({ queryKey: ['members', pid], queryFn: () => api.listMembers(pid) });
@@ -79,6 +107,32 @@ export function ProjectDetailPage() {
 			toast.success(`已移除成员${reassigned_tasks > 0 ? `，${reassigned_tasks} 条在途审批已改道给你` : ''}`);
 			queryClient.invalidateQueries({ queryKey: ['members', pid] });
 			queryClient.invalidateQueries({ queryKey: ['approvals'] });
+		},
+		onError: (err) => toast.error(err.message),
+	});
+
+	// 知识库绑定：负责人把组授权的库按阶段挂到项目（M3 §7.2）
+	const kbLinks = useQuery({ queryKey: ['kb-links', pid], queryFn: () => api.listKbLinks(pid) });
+	const kbs = useQuery({ queryKey: ['kbs'], queryFn: api.listKbs });
+	const [linking, setLinking] = useState(false);
+	const [linkKbId, setLinkKbId] = useState<number | null>(null);
+	const [linkStage, setLinkStage] = useState<string>('all');
+	const addLink = useMutation({
+		mutationFn: () => api.addKbLink(pid, linkKbId!, linkStage === 'all' ? null : linkStage),
+		onSuccess: (l) => {
+			toast.success(`已绑定「${l.kb_name}」`);
+			setLinking(false);
+			setLinkKbId(null);
+			setLinkStage('all');
+			queryClient.invalidateQueries({ queryKey: ['kb-links', pid] });
+		},
+		onError: (err) => toast.error(err.message),
+	});
+	const removeLink = useMutation({
+		mutationFn: (linkId: number) => api.removeKbLink(pid, linkId),
+		onSuccess: () => {
+			toast.success('已解除绑定');
+			queryClient.invalidateQueries({ queryKey: ['kb-links', pid] });
 		},
 		onError: (err) => toast.error(err.message),
 	});
@@ -110,25 +164,19 @@ export function ProjectDetailPage() {
 	const p = project.data;
 	const isOwner = p.owner_user_id === user?.id;
 
-	const stageState = (stage: string) => {
-		const stageRuns = (runs.data ?? []).filter((r) => r.stage === stage);
-		if (stageRuns.some((r) => r.status === 'approved')) return 'approved';
-		const active = stageRuns.find((r) => r.status === 'in_progress' || r.status === 'under_review');
-		if (active) return active.status === 'in_progress' ? 'in_progress' : 'under_review';
-		const isNext =
-			p.current_stage === 'none' ? stage === 'requirement' : stage === p.current_stage;
-		return isNext && p.status !== 'accepted' ? 'available' : 'locked';
-	};
-
+	const states = computeStageStates(p, runs.data ?? []);
 	const activeRun = (runs.data ?? []).find(
 		(r) => r.stage === p.current_stage && r.status === 'in_progress',
 	);
-
-	// 只读回看：某阶段最新一轮已通过的 run（时间线「查看」入口的跳转目标）
-	const latestApprovedRun = (stage: string) =>
-		(runs.data ?? [])
-			.filter((r) => r.stage === stage && r.status === 'approved')
-			.sort((a, b) => b.round - a.round)[0];
+	// 时间线默认聚焦：进行中的阶段，否则最近一个有运行的阶段，否则下一站
+	const defaultStage =
+		activeRun?.stage ??
+		(runs.data ?? []).at(-1)?.stage ??
+		(p.current_stage === 'none' ? 'requirement' : p.current_stage);
+	const focus = selectedStage ?? defaultStage;
+	const focusRuns = (runs.data ?? [])
+		.filter((r) => r.stage === focus)
+		.sort((a, b) => b.round - a.round);
 
 	return (
 		<div className="h-full overflow-auto p-6">
@@ -143,102 +191,127 @@ export function ProjectDetailPage() {
 					<Badge variant={p.status === 'active' ? 'default' : 'secondary'}>{p.status}</Badge>
 				</div>
 
-				{/* 阶段时间线 */}
+				{/* 阶段时间线 + 选中阶段的运行（完整流程全站只在这一处展开） */}
 				<Card>
-					<CardHeader>
-						<CardTitle className="text-base">项目生命周期</CardTitle>
-					</CardHeader>
-					<CardContent>
-						<div className="grid grid-cols-6 gap-2">
-							{STAGE_ORDER.map((stage) => {
-								const state = stageState(stage);
-								return (
-									<div
-										key={stage}
-										className="flex flex-col items-center gap-2 rounded-lg border p-3 text-center text-xs"
-									>
-										{state === 'approved' ? (
-											<CheckCircle2 className="size-5 text-green-600" />
-										) : state === 'in_progress' ? (
-											<CircleDotDashed className="size-5 animate-pulse text-blue-600" />
-										) : state === 'under_review' ? (
-											<CircleDotDashed className="size-5 text-amber-600" />
-										) : (
-											<Circle className="size-5 text-muted-foreground" />
-										)}
-										<span className="font-medium">{STAGE_LABELS[stage]}</span>
-										{state === 'approved' && <span className="text-green-600">已通过</span>}
-										{state === 'approved' && latestApprovedRun(stage) && (
-											<Button size="sm" variant="ghost" className="h-6 px-2 text-xs" asChild>
-												<Link
-													to={`/projects/${pid}/workbench/${latestApprovedRun(stage)!.id}`}
-													title="只读回看本阶段已通过轮次的对话与产物"
-												>
-													查看
-												</Link>
-											</Button>
-										)}
-										{state === 'in_progress' && <span className="text-blue-600">进行中</span>}
-										{state === 'under_review' && <span className="text-amber-600">待审批</span>}
-										{state === 'available' && (
-											<Button
-												size="sm"
-												variant="outline"
-												disabled={starting === stage}
-												title="开启本阶段：只创建运行，进入工作台补充说明或材料后再开始与智能体协作"
-												onClick={() => startStage(stage)}
-											>
-												{starting === stage ? <Loader2 className="animate-spin" /> : <Play />}
-												开启
-											</Button>
-										)}
-										{state === 'locked' && <span className="text-muted-foreground">—</span>}
-									</div>
-								);
-							})}
+					<CardHeader className="flex-row items-center justify-between space-y-0">
+						<div>
+							<CardTitle className="text-base">项目生命周期</CardTitle>
+							<CardDescription>
+								点击已通过 / 进行中的阶段查看该阶段的各轮运行与产物。
+							</CardDescription>
 						</div>
-					</CardContent>
-				</Card>
-
-				{/* 运行历史 */}
-				<Card>
-					<CardHeader className="flex-row items-center justify-between">
-						<CardTitle className="text-base">阶段运行</CardTitle>
 						{activeRun && (
 							<Button size="sm" asChild>
 								<Link to={`/projects/${pid}/workbench/${activeRun.id}`}>
-									<MessagesSquare />
-									进入 Agent 对话
+									<MessagesSquare /> 进入 Agent 对话
 								</Link>
 							</Button>
 						)}
 					</CardHeader>
-					<CardContent className="space-y-2">
-						{(runs.data ?? []).length === 0 && (
-							<p className="text-sm text-muted-foreground">还没有任何阶段运行。</p>
+					<CardContent>
+						<StageTimeline states={states} selected={focus} onSelect={setSelectedStage} />
+						<div className="mt-3 flex items-center justify-between gap-2 rounded-lg border bg-muted/30 px-3 py-2">
+							<span className="text-xs text-muted-foreground">
+								{STAGE_LABELS[focus] ?? focus} · {STAGE_STATE_TEXT[states[focus] ?? 'locked']}
+							</span>
+							{states[focus] === 'available' && (
+								<Button
+									size="sm"
+									disabled={starting === focus}
+									title="开启本阶段：只创建运行，进入工作台补充说明或材料后再开始与智能体协作"
+									onClick={() => startStage(focus)}
+								>
+									{starting === focus ? (
+										<Loader2 className="size-4 animate-spin" />
+									) : (
+										<Play className="size-4" />
+									)}
+									开启「{STAGE_LABELS[focus]}」
+								</Button>
+							)}
+						</div>
+						<div className="mt-2 space-y-1.5">
+							{focusRuns.length === 0 && (
+								<p className="px-1 py-2 text-xs text-muted-foreground">
+									该阶段还没有运行记录。
+								</p>
+							)}
+							{focusRuns.map((r) => (
+								<div
+									key={r.id}
+									className="flex items-center justify-between rounded-lg border px-3 py-2 text-sm"
+								>
+									<div className="flex items-center gap-3">
+										<span className="font-medium">第 {r.round} 轮</span>
+										<span className="text-xs text-muted-foreground">
+											{new Date(r.created_at).toLocaleDateString()} 创建
+										</span>
+									</div>
+									<div className="flex items-center gap-3">
+										<Badge variant={r.status === 'approved' ? 'default' : 'secondary'}>
+											{RUN_STATUS[r.status] ?? r.status}
+										</Badge>
+										<Button size="sm" variant="ghost" asChild>
+											<Link
+												to={`/projects/${pid}/workbench/${r.id}`}
+												title={r.status === 'in_progress' ? undefined : '只读回看当时的完整对话与产物'}
+											>
+												{r.status === 'in_progress' ? '工作台' : '查看'}
+											</Link>
+										</Button>
+									</div>
+								</div>
+							))}
+						</div>
+					</CardContent>
+				</Card>
+
+				{/* 知识库绑定：按阶段挂载组授权的知识库，绑定后该阶段智能体自动检索 */}
+				<Card>
+					<CardHeader className="flex-row items-center justify-between space-y-0">
+						<div>
+							<CardTitle className="text-base">知识库绑定</CardTitle>
+							<CardDescription>
+								授权给本项目的知识库按阶段挂载，绑定后该阶段智能体会自动检索库内文档；
+								「全部阶段」对所有阶段生效。可见范围 = 小组授权 ∩ 项目绑定。
+							</CardDescription>
+						</div>
+						{isOwner && (
+							<Button size="sm" variant="outline" onClick={() => setLinking(true)}>
+								<Boxes /> 绑定知识库
+							</Button>
 						)}
-						{(runs.data ?? []).map((r) => (
+					</CardHeader>
+					<CardContent className="space-y-1.5">
+						{(kbLinks.data ?? []).length === 0 && (
+							<p className="text-xs text-muted-foreground">
+								还没有绑定知识库{isOwner ? '，点右上角把行业规范 / 价格基准 / 案例库挂上来。' : '。'}
+							</p>
+						)}
+						{(kbLinks.data ?? []).map((l) => (
 							<div
-								key={r.id}
+								key={l.id}
 								className="flex items-center justify-between rounded-lg border px-3 py-2 text-sm"
 							>
-								<div className="flex items-center gap-3">
-									<span className="font-medium">{STAGE_LABELS[r.stage] ?? r.stage}</span>
-									<span className="text-xs text-muted-foreground">第 {r.round} 轮</span>
+								<div className="flex min-w-0 items-center gap-2">
+									<Badge variant="secondary">{KB_TYPE_LABELS[l.kb_type] ?? l.kb_type}</Badge>
+									<span className="truncate font-medium">{l.kb_name}</span>
+									<span className="shrink-0 text-xs text-muted-foreground">
+										{l.stage === null ? '全部阶段' : (STAGE_LABELS[l.stage] ?? l.stage)}
+									</span>
 								</div>
-								<div className="flex items-center gap-3">
-									<Badge variant={r.status === 'approved' ? 'default' : 'secondary'}>
-										{RUN_STATUS[r.status] ?? r.status}
-									</Badge>
-									<Button size="sm" variant="ghost" asChild>
-										<Link
-											to={`/projects/${pid}/workbench/${r.id}`}
-											title={r.status === 'in_progress' ? undefined : '只读回看当时的完整对话与产物'}
-										>
-											{r.status === 'in_progress' ? '工作台' : '查看'}
-										</Link>
+								{isOwner && (
+									<Button
+										size="sm"
+										variant="ghost"
+										className="h-6 w-6 px-0 text-destructive"
+										title="解除绑定"
+										disabled={removeLink.isPending}
+										onClick={() => removeLink.mutate(l.id)}
+									>
+										<X />
 									</Button>
-								</div>
+								)}
 							</div>
 						))}
 					</CardContent>
@@ -247,7 +320,7 @@ export function ProjectDetailPage() {
 				{/* 成员管理：负责人增删成员；添加「审批人」后，后续提交的
 				    产物会推送到对方的审批中心 */}
 				<Card>
-					<CardHeader className="flex-row items-center justify-between">
+					<CardHeader className="flex-row items-center justify-between space-y-0">
 						<div>
 							<CardTitle className="text-base">项目成员</CardTitle>
 							<CardDescription>
@@ -364,6 +437,62 @@ export function ProjectDetailPage() {
 				onOpenChange={(open) => !open && setDecideTask(null)}
 				onDecided={invalidate}
 			/>
+
+			{/* 绑定知识库对话框：选库 + 生效阶段 */}
+			<Dialog open={linking} onOpenChange={setLinking}>
+				<DialogContent>
+					<DialogHeader>
+						<DialogTitle>绑定知识库</DialogTitle>
+						<DialogDescription>
+							只能绑定已授权给你所在小组的知识库（即「资源中心 · 知识库」里能看到的那批）。
+						</DialogDescription>
+					</DialogHeader>
+					<div className="space-y-3">
+						<div className="space-y-1.5">
+							<Label>知识库</Label>
+							<Select
+								value={linkKbId?.toString() ?? ''}
+								onValueChange={(v) => setLinkKbId(Number(v))}
+							>
+								<SelectTrigger>
+									<SelectValue placeholder="选择知识库" />
+								</SelectTrigger>
+								<SelectContent>
+									{(kbs.data ?? []).map((kb) => (
+										<SelectItem key={kb.id} value={kb.id.toString()}>
+											{kb.name}（{KB_TYPE_LABELS[kb.kb_type] ?? kb.kb_type}）
+										</SelectItem>
+									))}
+								</SelectContent>
+							</Select>
+						</div>
+						<div className="space-y-1.5">
+							<Label>生效阶段</Label>
+							<Select value={linkStage} onValueChange={setLinkStage}>
+								<SelectTrigger>
+									<SelectValue />
+								</SelectTrigger>
+								<SelectContent>
+									<SelectItem value="all">全部阶段</SelectItem>
+									{STAGE_ORDER.map((s) => (
+										<SelectItem key={s} value={s}>
+											{STAGE_LABELS[s]}
+										</SelectItem>
+									))}
+								</SelectContent>
+							</Select>
+						</div>
+					</div>
+					<DialogFooter>
+						<DialogClose asChild>
+							<Button variant="outline">取消</Button>
+						</DialogClose>
+						<Button disabled={!linkKbId || addLink.isPending} onClick={() => addLink.mutate()}>
+							{addLink.isPending && <Loader2 className="size-4 animate-spin" />} 绑定
+						</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
 		</div>
 	);
 }

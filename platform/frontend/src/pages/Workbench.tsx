@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { ToolCallBlock } from '@agentscope-ai/agentscope/message';
 import {
 	ArrowLeft,
+	BookOpen,
 	CheckCheck,
 	Download,
 	Eye,
@@ -18,8 +19,9 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { toast } from 'sonner';
 
-import { api, askingToolCalls, STAGE_LABELS, STAGE_ORDER } from '@/api/platform';
+import { api, askingToolCalls, STAGE_LABELS } from '@/api/platform';
 import { ASMessageBubble } from '@/components/chat/ASMessageBubble';
+import { computeStageStates, StageProgressDots } from '@/components/platform/StageStepper';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -50,7 +52,11 @@ export function WorkbenchPage() {
 
 	const project = useQuery({ queryKey: ['project', pid], queryFn: () => api.getProject(pid) });
 	const run = useQuery({ queryKey: ['run', rid], queryFn: () => api.listStageRuns(pid) });
+	const kbLinks = useQuery({ queryKey: ['kb-links', pid], queryFn: () => api.listKbLinks(pid) });
 	const currentRun = (run.data ?? []).find((r) => r.id === rid);
+	const stageKbs = (kbLinks.data ?? []).filter(
+		(l) => l.stage === currentRun?.stage || l.stage === null,
+	);
 	const artifacts = useQuery({
 		queryKey: ['artifacts', rid],
 		queryFn: () => api.listRunArtifacts(rid),
@@ -236,17 +242,25 @@ export function WorkbenchPage() {
 							{RUN_STATUS[currentRun.status] ?? currentRun.status}
 						</Badge>
 					</div>
-					<div className="space-y-1.5 text-xs">
-						{STAGE_ORDER.map((s) => (
-							<div
-								key={s}
-								className={
-									s === currentRun.stage
-										? 'rounded bg-primary/10 px-2 py-1 font-medium text-primary'
-										: 'px-2 py-1 text-muted-foreground'
-								}
-							>
-								{STAGE_LABELS[s]}
+					<div>
+						<p className="mb-1.5 text-xs font-medium text-muted-foreground">项目进度</p>
+						<StageProgressDots
+							className="px-1"
+							states={project.data ? computeStageStates(project.data, run.data ?? []) : {}}
+						/>
+					</div>
+					<div className="space-y-1.5">
+						<p className="text-xs font-medium text-muted-foreground">本阶段挂载的知识库</p>
+						{stageKbs.length === 0 && (
+							<p className="text-xs text-muted-foreground/70">无；可在项目页绑定授权范围内的知识库。</p>
+						)}
+						{stageKbs.map((l) => (
+							<div key={l.id} className="flex items-center gap-1.5 rounded-md border bg-muted/40 px-2 py-1 text-xs">
+								<BookOpen className="size-3 shrink-0 text-primary" />
+								<span className="min-w-0 flex-1 truncate">{l.kb_name}</span>
+								{l.stage === null && (
+									<span className="shrink-0 text-[10px] text-muted-foreground">全阶段</span>
+								)}
 							</div>
 						))}
 					</div>

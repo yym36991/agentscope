@@ -75,6 +75,7 @@ export interface UserOut {
 	id: number;
 	username: string;
 	groups: string[];
+	role?: 'admin' | 'member';
 }
 
 export interface ProjectOut {
@@ -170,6 +171,115 @@ export const STAGE_LABELS: Record<string, string> = {
 	acceptance: '验收审计',
 };
 
+export const KB_TYPE_LABELS: Record<string, string> = {
+	spec: '行业规范库',
+	price: '价格基准库',
+	case: '案例库',
+	template: '模板库',
+	distill: '沉淀库',
+};
+
+// ---------- knowledge bases (M3) ----------
+
+export interface KbGrantOut {
+	group_id: number;
+	group_name: string;
+	level: 'read' | 'write';
+}
+
+export interface KbOut {
+	id: number;
+	name: string;
+	kb_type: 'spec' | 'price' | 'case' | 'template' | 'distill';
+	description: string;
+	/** null while no embedding credential is registered — KB stays a stub. */
+	agentscope_kb_id: string | null;
+	owner_group_id: number | null;
+	/** admin-only projection */
+	grants: KbGrantOut[] | null;
+}
+
+export interface KbDocOut {
+	document_id: string;
+	filename: string;
+	status: string;
+}
+
+export interface KbSearchHit {
+	content?: string;
+	text?: string;
+	score?: number;
+	metadata?: Record<string, unknown>;
+}
+
+export interface KbLinkOut {
+	id: number;
+	kb_id: number;
+	kb_name: string;
+	kb_type: KbOut['kb_type'];
+	stage: string | null;
+}
+
+export interface GroupOut {
+	id: number;
+	name: string;
+}
+
+export interface PriceItemOut {
+	id: number;
+	region: string;
+	item_type: string;
+	name: string;
+	value: number;
+	unit: string;
+	effective_year: number;
+	source: string;
+	notes: string;
+}
+
+// ---------- resource hubs ----------
+
+export interface HubInfo {
+	hub_id: string;
+	display_name: string;
+	description: string;
+	icon_url: string | null;
+}
+
+export interface HubCard {
+	id: string;
+	hub_id: string;
+	name: string;
+	description: string;
+	tags?: string[];
+	author?: string | null;
+	icon_url?: string | null;
+	installs?: number | null;
+	/** MCP only: `inputs` means install needs a values form. */
+	auth?: 'none' | 'inputs';
+	inputs_schema?: { properties?: Record<string, { title?: string }> } | null;
+	is_stateful?: boolean;
+}
+
+export interface McpLibItem {
+	id: string;
+	name: string;
+	enabled: boolean;
+	is_stateful: boolean;
+	display_name: string | null;
+	description: string;
+	tags: string[];
+}
+
+export interface SkillLibItem {
+	id: string;
+	name: string;
+	enabled: boolean;
+	display_name: string | null;
+	description: string;
+	tags: string[];
+}
+
 // ---------- auth ----------
 
 export const api = {
@@ -248,6 +358,96 @@ export const api = {
 		request<MemberOut>(`/projects/${projectId}/members`, 'POST', { username, role }),
 	removeMember: (projectId: number, userId: number) =>
 		request<RemoveMemberOut>(`/projects/${projectId}/members/${userId}`, 'DELETE'),
+
+	// ---------- knowledge bases (M3: group-authorized, stage-bound) ----------
+	listKbs: () => request<KbOut[]>('/kbs'),
+	createKb: (name: string, kb_type: KbOut['kb_type'], description: string) =>
+		request<KbOut>('/kbs', 'POST', { name, kb_type, description }),
+	deleteKb: (kbId: number) => request<void>(`/kbs/${kbId}`, 'DELETE'),
+	setKbGrants: (kbId: number, grants: { group_id: number; level: 'read' | 'write' }[]) =>
+		request<KbOut>(`/kbs/${kbId}/grants`, 'PUT', { grants }),
+	listKbDocs: (kbId: number) => request<KbDocOut[]>(`/kbs/${kbId}/documents`),
+	uploadKbDoc: (kbId: number, file: File) => {
+		const form = new FormData();
+		form.append('file', file);
+		return request<KbDocOut>(`/kbs/${kbId}/documents`, 'POST', form);
+	},
+	searchKb: (kbId: number, query: string, top_k = 5) =>
+		request<{ results: KbSearchHit[] }>(`/kbs/${kbId}/search`, 'POST', { query, top_k }),
+	listGroups: () => request<GroupOut[]>('/groups'),
+
+	// ---------- project KB bindings ----------
+	listKbLinks: (projectId: number) =>
+		request<KbLinkOut[]>(`/projects/${projectId}/kb-links`),
+	addKbLink: (projectId: number, kbId: number, stage: string | null) =>
+		request<KbLinkOut>(`/projects/${projectId}/kb-links`, 'POST', {
+			kb_id: kbId,
+			stage,
+		}),
+	removeKbLink: (projectId: number, linkId: number) =>
+		request<void>(`/projects/${projectId}/kb-links/${linkId}`, 'DELETE'),
+
+	// ---------- price baseline (M3 structured track) ----------
+	listPriceItems: (filters: { region?: string; item_type?: string; keyword?: string }) => {
+		const q = new URLSearchParams();
+		if (filters.region) q.set('region', filters.region);
+		if (filters.item_type) q.set('item_type', filters.item_type);
+		if (filters.keyword) q.set('keyword', filters.keyword);
+		const qs = q.toString();
+		return request<PriceItemOut[]>(`/price-items${qs ? `?${qs}` : ''}`);
+	},
+	importPriceItems: (file: File) => {
+		const form = new FormData();
+		form.append('file', file);
+		return request<{ imported: number; replaced_regions: string[] }>(
+			'/admin/price-items/import',
+			'POST',
+			form,
+		);
+	},
+
+	// ---------- resource hubs (sys:runtime's shared library) ----------
+	listMcpHubs: () => request<HubInfo[]>('/hubs/mcp'),
+	listMcpCards: (hubId: string, params?: { q?: string; cursor?: string; limit?: number }) => {
+		const q = new URLSearchParams();
+		if (params?.q) q.set('q', params.q);
+		if (params?.cursor) q.set('cursor', params.cursor);
+		q.set('limit', String(params?.limit ?? 20));
+		return request<{ cards: HubCard[]; next_cursor: string | null }>(
+			`/hubs/mcp/${encodeURIComponent(hubId)}/cards?${q}`,
+		);
+	},
+	installMcp: (hubId: string, cardId: string, name?: string, values?: Record<string, unknown>) =>
+		request<McpLibItem>(
+			`/hubs/mcp/${encodeURIComponent(hubId)}/cards/${encodeURIComponent(cardId)}/install`,
+			'POST',
+			{ name: name ?? null, values: values ?? {} },
+		),
+	listMcpLibrary: () => request<McpLibItem[]>('/mcp-library'),
+	deleteMcp: (mcpId: string) => request<void>(`/mcp-library/${encodeURIComponent(mcpId)}`, 'DELETE'),
+	updateMcp: (mcpId: string, patch: { enabled?: boolean; name?: string }) =>
+		request<McpLibItem>(`/mcp-library/${encodeURIComponent(mcpId)}`, 'PATCH', patch),
+
+	listSkillHubs: () => request<HubInfo[]>('/hubs/skill'),
+	listSkillCards: (hubId: string, params?: { q?: string; cursor?: string; limit?: number }) => {
+		const q = new URLSearchParams();
+		if (params?.q) q.set('q', params.q);
+		if (params?.cursor) q.set('cursor', params.cursor);
+		q.set('limit', String(params?.limit ?? 20));
+		return request<{ cards: HubCard[]; next_cursor: string | null }>(
+			`/hubs/skill/${encodeURIComponent(hubId)}/cards?${q}`,
+		);
+	},
+	installSkill: (hubId: string, cardId: string, name?: string) => {
+		const q = name ? `?name=${encodeURIComponent(name)}` : '';
+		return request<SkillLibItem>(
+			`/hubs/skill/${encodeURIComponent(hubId)}/cards/${encodeURIComponent(cardId)}/install${q}`,
+			'POST',
+		);
+	},
+	listSkillLibrary: () => request<SkillLibItem[]>('/skill-library'),
+	deleteSkill: (skillId: string) =>
+		request<void>(`/skill-library/${encodeURIComponent(skillId)}`, 'DELETE'),
 };
 
 /** Asking tool calls of a message, for the HITL confirm bar. */

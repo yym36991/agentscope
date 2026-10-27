@@ -317,6 +317,31 @@ class RuntimeClient:
             },
         )
 
+    # ---------- resource hubs & shared library ----------
+
+    async def relay_json(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict | None = None,
+        body: dict | None = None,
+    ) -> object:
+        """Forward one hub / library call to the runtime as sys:runtime.
+
+        The hub pages browse registries (GitHub, ClawHub) and manage the
+        single shared library the six stage agents draw from, so there is
+        no per-user projection to apply — the runtime's JSON passes
+        through unchanged. The API layer owns the authz split (browse for
+        everyone, install/edit for admins).
+        """
+        kwargs: dict[str, object] = {}
+        if params is not None:
+            kwargs["params"] = params
+        if body is not None:
+            kwargs["json"] = body
+        return await self._request(method, path, **kwargs)
+
     # ---------- skills ----------
 
     async def add_workspace_skill(
