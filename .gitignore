@@ -171,3 +171,4 @@ platform/backend/artifacts/
 
 docs/a*
 docs/A*
+**/qdrant/

@@ -325,7 +325,7 @@ users ──< group_members >── groups
 ```
 
 - **先过滤、后检索**（authorization-aware RAG）：权限不通过的知识库根本不进入检索候选，而不是检索完再过滤（防泄漏 + 省算力）
-- AgentScope 侧每个 KB 物理独立一个向量集合（`CollectionPerKbManager`，`kb_<uuid>`），天然按库隔离
+- AgentScope 侧每个 KB 物理独立一个向量集合（`CollectionPerKbManager`，`kb_<uuid>`），天然按库隔离；向量索引走**进程内嵌 Qdrant 本地落盘**（`AS_QDRANT_PATH`，2026-10-27 从 `:memory:` 改为 path 模式——不是独立向量库服务，只是 pip 依赖，索引随运行时重启保留；文档字节在 blobs/、KB/文档记录在 PG。多实例部署时再评估 url= 共享实例或 PG 向量后端，本机 PG 便携版无 pgvector 扩展，不引入）
 - 文档上传/删除 = write 权限，仅授予管理组
 
 > **M3 已实现（2026-10-26）**：`kbs/kb_grants/project_kb_links/price_items` 四表（迁移 `c7d2e5f81a63`）；KB CRUD/授权/文档代理/检索代理与项目绑定走 `app/api/kbs.py`（可见性判定 = 组授权 ∩ 项目阶段绑定，管理员全见，写权限校验在上传代理）；会话挂载经 `create_session(knowledge_config)` + 每次聊天自愈 PATCH（`flow.stage_kb_ids`）。价格基准走 §7.1 双轨的"工具"侧：`price_items` 结构化表 + L1 挂载的 fastmcp 服务（`/mcp/price/`，工具 `query_price_baseline`/`list_price_types`），运行时经 `default_mcps` 以 streamable-http 消费，预算智能体提示词明确"费率必须查工具、不得凭记忆报价"；管理员 CSV/XLSX 导入接口按 (region, effective_year) 整体替换。验证：`scripts/verify_m3.py` 十个用例（含跨组 403、非管理员导入 403、MCP 精确返回导入值、无凭证创建 KB 优雅 503 零落库）。**待办**：向量化 credential（sys:runtime 名下 openai 类型）由管理员注册后，KB 实建/文档上传/RAG 挂载的真实链路即通——编排层与授权逻辑已就绪。

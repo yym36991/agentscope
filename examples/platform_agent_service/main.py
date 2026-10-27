@@ -9,6 +9,9 @@
 - 总线：``RedisMessageBus``（``AS_REDIS_HOST`` / ``AS_REDIS_PORT``），
   状态外置到 Redis，因此可以多进程/多实例起多个副本
 - 下载签名密钥：``AS_DOWNLOAD_SECRET``（重启后签名 URL 仍有效）
+- 知识库向量索引：Qdrant 本地落盘（``AS_QDRANT_PATH``，默认本目录
+  ``qdrant/``）——进程内嵌、不引入独立向量库服务，索引随重启保留；
+  文档字节在 blobs/、KB/文档记录在 PG，这里只存分块向量
 
 由仓库根 start.sh 第 [3/6] 项拉起，端口 8000；会话工作区落在
 本目录 ``workspaces/`` 下。其余能力（渠道/知识库/子智能体模板/
@@ -89,7 +92,15 @@ storage = AsyncSQLAlchemyStorage(
     ),
 )
 
-vector_store = QdrantStore(location=":memory:")
+# 进程内嵌 Qdrant 的本地落盘模式：不是独立服务，只是 pip 依赖；索引
+# 持久化到磁盘，运行时重启后 KB 检索不再丢（元数据本就在 PG）。
+# 多实例部署（M5）时改为 url= 指向共享 Qdrant，或换 PG 向量后端。
+vector_store = QdrantStore(
+    path=os.getenv(
+        "AS_QDRANT_PATH",
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "qdrant"),
+    ),
+)
 
 
 # L1 编排层为每个阶段会话显式传入的共享工作区 id（architecture.md
@@ -161,9 +172,9 @@ app = create_app(
         # The default MCP servers that will be added into the workspace
         default_mcps=default_mcps,
     ),
-    # Knowledge base feature — backed by an in-memory Qdrant store. The
-    # CollectionPerKbManager allocates one collection per knowledge base,
-    # so any embedding dimension is allowed.
+    # Knowledge base feature — backed by the on-disk Qdrant store above.
+    # The CollectionPerKbManager allocates one collection per knowledge
+    # base, so any embedding dimension is allowed.
     knowledge_base_manager=CollectionPerKbManager(
         storage=storage,
         vector_store=vector_store,
