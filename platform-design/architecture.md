@@ -525,7 +525,7 @@ seed.py 的提示词同为平台配置的真相来源。首批为测试用例设
 
 - **版本模型**：`artifact_versions` 记录每次送审快照（stage、version、file_path、format、status）。同一阶段多次退回修改 = version 递增；APPROVED 的版本被 superseded 需走变更流程
 - **预览**（视图B右栏/视图A详情页）：markdown 渲染（PRD/用例/报告）、HTML iframe（原型）、表格渲染（功能点清单）；workspace 下载令牌机制现成（短时签名，支持浏览器直下）
-- **导出**：编排层导出服务做 md→docx（pandoc/python-docx）、清单→xlsx（openpyxl）——**这是自建件**，AgentScope 没有文档生成能力（§8.1 已列）
+- **导出**：编排层导出服务做 md→docx（python-docx）、清单→xlsx（openpyxl）——**这是自建件**，AgentScope 没有文档生成能力（§8.1 已列）。**已实现（2026-10-27，M5）**：`app/services/exporters.py` 渲染智能体产出的 md 子集（标题/段落/加粗/行内代码/列表/表格/代码块/引用），`GET /stage-runs/{id}/artifacts/{aid}/export?fmt=docx|xlsx` 出文件（xlsx 按就近标题把每张表拆成工作表），工作台预览卡带 Word/Excel 按钮；HTML 原型不导出
 - **版本对比**：文本类 diff（前端已有 DiffPreview 组件可复用）
 
 ---
@@ -566,7 +566,7 @@ seed.py 的提示词同为平台配置的真相来源。首批为测试用例设
 | 组件 | 单实例（≈当前本机形态） | 多实例 |
 |---|---|---|
 | 消息总线 | `InMemoryMessageBus`（仅单进程内有效） | `RedisMessageBus`（Redis Streams + Lua） |
-| 会话运行互斥锁 | 进程内锁 | **必须走总线的分布式锁**——否则两个副本可同时驱动同一会话（409 互斥失效） |
+| 会话运行互斥锁 | 进程内锁 | **必须走总线的分布式锁**——否则两个副本可同时驱动同一会话。互斥是两级的（2026-10-27 双副本实测）：同进程双投递 409（ChatRunRegistry），跨副本投递被接受、任务在 Redis 锁后**排队串行**（`acquire_lock` 是 SET NX 轮询等待而非快速失败） |
 | 会话/智能体存储 | `RedisStorage`（外部 Redis，本身可共用） | 同左可用；生产建议 `AsyncSQLAlchemyStorage`(PostgreSQL，带 alembic 迁移) |
 | Workspace | `LocalWorkspaceManager` 本地盘即可 | 本地盘须换**共享存储**（NFS/云盘）或沙箱型（Docker/K8s）——产物预览/下载请求可能落在任一副本 |
 | 知识库文档 blob | `LocalBlobStore` | `S3BlobStore`（MinIO/S3） |
@@ -641,7 +641,7 @@ v0.3 决策：**目标形态直接定为多实例**（§13.1 #12）——按多�
 | M4 记忆与沉淀 | 项目档案表 + AgenticMemoryMiddleware + 沉淀流程 | 跨阶段交接引用上游结论；沉淀入库可检索 |
 | M5 部署形态 | 多实例（Redis 总线/PG 存储/LB 配置）+ 内网离线包 + 导出服务 | 双形态部署演练通过 |
 
-> **实施状态（2026-10-26）**：M1 ✅；M2 ✅（六阶段 + 退回重开新会话共享工作区 + kickoff 注入上游产物与退回意见，`scripts/walkthrough.py` 端到端走通：项目 #19 全六阶段 + 退回重做 + 测试沙箱隔离，13 分钟）；M3 ✅ 后端与验收用例（§7.2 注记，`scripts/verify_m3.py` 十用例；走查中预算智能体实调 price-baseline MCP 7 次查准费率，含"北京无生产率基准→自动回退全国基准"的空结果恢复；真实 RAG 挂载待管理员注册向量化 credential）；M4 ✅（§6.4 注记；沉淀草稿 2353 字走完审批，入库按设计降级存档，凭证就绪后可入库）。M5 未开始。前端仅覆盖既有两视图，KB 管理/沉淀审批页面待后续迭代。运行时工作区目录已按项目钉死（§8.5 注记，ProjectWorkspaceManager）。
+> **实施状态（2026-10-27）**：M1 ✅；M2 ✅（六阶段 + 退回重开新会话共享工作区 + kickoff 注入上游产物与退回意见，`scripts/walkthrough.py` 端到端走通：项目 #19 全六阶段 + 退回重做 + 测试沙箱隔离，13 分钟）；M3 ✅ 后端与验收用例（§7.2 注记，`scripts/verify_m3.py` 十用例；走查中预算智能体实调 price-baseline MCP 7 次查准费率，含"北京无生产率基准→自动回退全国基准"的空结果恢复；真实 RAG 挂载待管理员注册向量化 credential）；M4 ✅（§6.4 注记；沉淀草稿 2353 字走完审批，入库按设计降级存档，凭证就绪后可入库）。M5 ✅（2026-10-27，`scripts/verify_m5.py` 11 项全过，97 秒）：多实例——本机双副本实测（AS_PORT 起 8001 副本，同 PG+Redis），共享存储可见性、跨副本会话、跨副本 SSE、两级运行互斥（§10.3 修正语义）、串行执行全部通过；L1 防腐层支持 `PLATFORM_RUNTIME_BASE_URLS` 多副本轮询 + 连接级故障转移，并修掉系统代理劫持内网调用问题（httpx `trust_env=False`）。导出服务——md→docx/xlsx（§9 注记）。内网离线包——`deploy/offline/`（build-bundle.sh + README-zh.md，wheels+前端静态产物，--no-index 离线 venv 已验证）。前端仅覆盖既有两视图，KB 管理/沉淀审批页面待后续迭代。运行时工作区目录已按项目钉死（§8.5 注记，ProjectWorkspaceManager）。
 >
 > **管理视图批次（2026-10-27，v0.5）**：对标主流项目管理软件补齐 PM 能力——统计看板（`GET /stats`：项目状态分布 / 各阶段平均耗时与轮次 / 退回率 / 审批通过率 / 价格基准覆盖）、意见台账（`GET /feedback`：通过 + 退回意见跨项目聚合，双路径 join 规避 stage 审批任务 project_id 为空的坑）、组织管理页（§13 决策 5 的 UI 闭环：小组 CRUD + 成员部门调整，管理员）、项目甘特视图（每阶段一条：首轮创建 → 审批决定，标注轮次与退回）、追溯矩阵（§7.3）。可见性口径：管理员全见，成员 = owner ∪ 成员。附带修复：`decided_at` 时区统一改走数据库时钟（此前 Python UTC 与 PG 会话时区相差 8 小时，历史数据已回填 +8h）。
 
