@@ -246,11 +246,13 @@ so anything you want them to see MUST be sent through `TeamSay`.""",
 
 
 if __name__ == "__main__":
-    # Start the service
+    # Start the service. Port is configurable (AS_PORT) so a second
+    # replica can run on the same host against the same PG + Redis —
+    # the multi-instance form architecture.md §10.3 describes.
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
-        port=8000,
+        port=int(os.getenv("AS_PORT", "8000")),
         # Hot reload forces a SelectorEventLoop on Windows, which cannot
         # spawn the subprocesses that the builtin tools rely on
         reload=sys.platform != "win32",

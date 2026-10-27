@@ -51,6 +51,18 @@ STAGE_ORDER: list[StageKey] = [
     StageKey.ACCEPTANCE,
 ]
 
+# Chinese display labels (kept in sync with the frontend's
+# STAGE_LABELS; the export service uses them in titles/filenames).
+STAGE_LABELS: dict[StageKey, str] = {
+    StageKey.NONE: "未开始",
+    StageKey.REQUIREMENT: "需求生成",
+    StageKey.PROTOTYPE: "原型设计",
+    StageKey.BUDGET: "工时预算",
+    StageKey.TESTCASES: "测试用例",
+    StageKey.TESTING: "测试",
+    StageKey.ACCEPTANCE: "验收审计",
+}
+
 # Runtime agent name per stage. The seed script (scripts/seed.py)
 # creates these under sys:runtime; M1 seeds only the first.
 STAGE_AGENT_NAMES: dict[StageKey, str] = {

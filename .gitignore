@@ -172,3 +172,9 @@ platform/backend/artifacts/
 docs/a*
 docs/A*
 **/qdrant/
+**/qdrant-replica/
+deploy/offline/backend-wheels/
+deploy/offline/runtime-wheels/
+deploy/offline/platform-dist/
+deploy/offline/webui-dist/
+deploy/offline/backend-test-venv/

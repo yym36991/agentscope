@@ -421,6 +421,25 @@ export const api = {
 		request<ArtifactOut[]>(`/stage-runs/${runId}/artifacts`),
 	getRunArtifact: (runId: number, artifactId: number) =>
 		request<ArtifactOut & { content: string }>(`/stage-runs/${runId}/artifacts/${artifactId}`),
+	// Export renders server-side (md → docx/xlsx); the response is a
+	// file blob, so it can't go through the JSON request() helper.
+	exportRunArtifact: async (runId: number, artifactId: number, fmt: 'docx' | 'xlsx') => {
+		const res = await fetch(
+			`${BASE}/stage-runs/${runId}/artifacts/${artifactId}/export?fmt=${fmt}`,
+			{ headers: { Authorization: `Bearer ${getToken()}` } },
+		);
+		if (!res.ok) {
+			let detail = res.statusText;
+			try {
+				const json = (await res.json()) as { detail?: unknown };
+				if (typeof json.detail === 'string') detail = json.detail;
+			} catch {
+				/* not JSON */
+			}
+			throw new ApiError(res.status, detail);
+		}
+		return res.blob();
+	},
 	submitLatest: (runId: number, title: string) =>
 		request<ArtifactOut>(`/stage-runs/${runId}/submit-latest`, 'POST', { title }),
 	listWorkspaceFiles: (runId: number) =>

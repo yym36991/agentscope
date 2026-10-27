@@ -6,11 +6,14 @@ app/services/flow.py (single implementation, §5).
 """
 import base64
 import io
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Literal
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -37,7 +40,8 @@ from app.models import (
     User,
 )
 from app.services import flow
-from app.services.flow import FlowError
+from app.services.exporters import md_to_docx, md_to_xlsx
+from app.services.flow import FlowError, STAGE_LABELS
 from app.runtime_client import RuntimeCallError, get_runtime_client
 
 router = APIRouter(tags=["projects"])
@@ -577,6 +581,78 @@ async def get_run_artifact(
         "format": artifact.format.value,
         "content": content,
     }
+
+
+_EXPORT_MEDIA = {
+    "docx": (
+        "application/vnd.openxmlformats-officedocument"
+        ".wordprocessingml.document"
+    ),
+    "xlsx": (
+        "application/vnd.openxmlformats-officedocument"
+        ".spreadsheetml.sheet"
+    ),
+}
+
+
+@router.get("/stage-runs/{run_id}/artifacts/{artifact_id}/export")
+async def export_run_artifact(
+    run_id: int,
+    artifact_id: int,
+    fmt: Annotated[str, Query(pattern="^(docx|xlsx)$")] = "docx",
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> StreamingResponse:
+    """Render a stored Markdown artifact as Word / Excel (§9, M5).
+
+    The docx path is for the document deliverables (PRD, test docs,
+    reports — §13 decision 1); xlsx turns each table in the artifact
+    into a worksheet (function-point and budget lists). HTML
+    prototypes stay HTML.
+    """
+    run, project = await _get_run_or_404(db, run_id, user)
+    artifact = await db.get(ArtifactVersion, artifact_id)
+    if artifact is None or artifact.stage_run_id != run.id:
+        raise HTTPException(status_code=404, detail="artifact not found")
+    if artifact.format != ArtifactFormat.MD:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{artifact.format.value} 产物不支持文档导出（仅 Markdown 产物）",
+        )
+    md = (Path(get_settings().artifact_dir) / artifact.storage_path).read_text(
+        encoding="utf-8"
+    )
+    meta = [
+        f"项目：{project.name}",
+        f"阶段：{STAGE_LABELS[run.stage]}",
+        f"轮次：第 {run.round} 轮",
+        f"产物版本：v{artifact.version_no}",
+        f"导出时间：{datetime.now():%Y-%m-%d %H:%M}",
+    ]
+    payload = (
+        md_to_docx(artifact.title, meta, md)
+        if fmt == "docx"
+        else md_to_xlsx(artifact.title, meta, md)
+    )
+    # Strip filesystem-hostile characters out of the project title; the
+    # rest of the name is platform-generated ids.
+    stem = re.sub(
+        r'[\\/:*?"<>|\s]+',
+        "_",
+        f"{project.name}-{STAGE_LABELS[run.stage]}"
+        f"-run{run.id}-v{artifact.version_no}",
+    ).strip("_")
+    filename = f"{stem}.{fmt}"
+    return StreamingResponse(
+        io.BytesIO(payload),
+        media_type=_EXPORT_MEDIA[fmt],
+        headers={
+            "Content-Disposition": (
+                f"attachment; filename=artifact-{artifact.id}.{fmt}; "
+                f"filename*=UTF-8''{quote(filename)}"
+            )
+        },
+    )
 
 
 

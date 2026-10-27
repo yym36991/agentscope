@@ -12,6 +12,7 @@ import {
 	Paperclip,
 	Play,
 	Send,
+	Sheet,
 	ShieldQuestion,
 	X,
 } from 'lucide-react';
@@ -221,6 +222,26 @@ export function WorkbenchPage() {
 		link.download = name.endsWith(`.${format}`) ? name : `${name}.${format}`;
 		link.click();
 		URL.revokeObjectURL(url);
+	};
+
+	// 服务端导出（md → docx/xlsx，M5）：拉 blob 存文件
+	const [exporting, setExporting] = useState<'docx' | 'xlsx' | null>(null);
+	const exportArtifact = async (fmt: 'docx' | 'xlsx') => {
+		const a = previewQuery.data!;
+		setExporting(fmt);
+		try {
+			const blob = await api.exportRunArtifact(rid, a.id, fmt);
+			const url = URL.createObjectURL(blob);
+			const link = document.createElement('a');
+			link.href = url;
+			link.download = `${a.title}-v${a.version_no}.${fmt}`;
+			link.click();
+			URL.revokeObjectURL(url);
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : '导出失败');
+		} finally {
+			setExporting(null);
+		}
 	};
 
 	return (
@@ -604,17 +625,38 @@ export function WorkbenchPage() {
 						<Card className="min-h-0">
 							<CardHeader className="flex-row items-center justify-between space-y-0">
 								<CardTitle className="truncate text-sm">{previewQuery.data.title}</CardTitle>
-								<Button
-									size="sm"
-									variant="outline"
-									className="shrink-0"
-									onClick={() => {
-										const a = previewQuery.data!;
-										downloadBlob(`${a.title}-v${a.version_no}`, a.content, a.format);
-									}}
-								>
-									<Download /> 下载
-								</Button>
+								<div className="flex shrink-0 gap-1.5">
+									{previewQuery.data.format === 'md' && (
+										<>
+											<Button
+												size="sm"
+												variant="outline"
+												disabled={exporting !== null}
+												onClick={() => exportArtifact('docx')}
+											>
+												{exporting === 'docx' ? <Loader2 className="animate-spin" /> : <FileText />} Word
+											</Button>
+											<Button
+												size="sm"
+												variant="outline"
+												disabled={exporting !== null}
+												onClick={() => exportArtifact('xlsx')}
+											>
+												{exporting === 'xlsx' ? <Loader2 className="animate-spin" /> : <Sheet />} Excel
+											</Button>
+										</>
+									)}
+									<Button
+										size="sm"
+										variant="outline"
+										onClick={() => {
+											const a = previewQuery.data!;
+											downloadBlob(`${a.title}-v${a.version_no}`, a.content, a.format);
+										}}
+									>
+										<Download /> 下载
+									</Button>
+								</div>
 							</CardHeader>
 							<CardContent className="max-h-[60vh] overflow-auto text-sm">
 								{previewQuery.data.format === 'html' ? (

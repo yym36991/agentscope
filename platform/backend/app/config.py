@@ -32,6 +32,12 @@ class Settings(BaseSettings):
     # AgentScope runtime access. app/runtime_client is the only code
     # allowed to use these (§8.7 anti-corruption layer).
     runtime_base_url: str = "http://localhost:8000"
+    # Multi-replica form (architecture.md §10.1/§10.3): comma-separated
+    # base URLs, round-robin with connect-failure failover. Overrides
+    # the single URL above when set — e.g. behind a K8s Service this
+    # stays single (the LB does the spreading); pointing L1 at N
+    # replicas directly is the no-LB small-deployment form.
+    runtime_base_urls: str = ""
     runtime_principal: str = "sys:runtime"
     # Chat model the platform binds onto every stage session (§8.6:
     # the credential lives under sys:runtime, end users stay zero-config).

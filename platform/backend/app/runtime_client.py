@@ -10,6 +10,7 @@ The surface is deliberately narrow: the six operations the stage flow
 needs, in typed wrappers, so a runtime API change shows up here as one
 edit instead of scattered HTTP calls.
 """
+import itertools
 from functools import lru_cache
 
 import httpx
@@ -31,23 +32,47 @@ class RuntimeCallError(Exception):
 
 
 class RuntimeClient:
-    """Thin typed wrapper over the runtime's HTTP API."""
+    """Thin typed wrapper over the runtime's HTTP API.
+
+    One client per runtime base URL: with ``runtime_base_urls`` set
+    (architecture.md §10.1) requests round-robin across replicas and a
+    connect-phase failure (replica down, request never delivered) falls
+    through to the next one. Only connect errors are retried — a
+    read timeout after delivery must not re-send a POST.
+    """
 
     def __init__(self) -> None:
         settings = get_settings()
-        self._base_url = settings.runtime_base_url.rstrip("/")
+        urls = [
+            u.strip().rstrip("/")
+            for u in (settings.runtime_base_urls or "").split(",")
+            if u.strip()
+        ] or [settings.runtime_base_url.rstrip("/")]
+        self._base_urls = urls
         self._principal = settings.runtime_principal
-        self._client = httpx.AsyncClient(
-            base_url=self._base_url,
-            headers={"X-User-ID": self._principal},
-            timeout=10.0,
-        )
+        self._clients = [
+            httpx.AsyncClient(
+                base_url=url,
+                headers={"X-User-ID": self._principal},
+                timeout=10.0,
+                # Runtime endpoints are internal (localhost / intranet):
+                # never route them through a user's system proxy. With
+                # trust_env=True httpx picks up the Windows registry
+                # proxy, which turns a dead replica into a proxy 502
+                # instead of a connect error — breaking failover (and
+                # leaking internal traffic to an external hop).
+                trust_env=False,
+            )
+            for url in urls
+        ]
+        self._rr = itertools.count()
         # agent name -> agent id, filled by find_agent_by_name; the
         # platform seeds its agents once, so process-lifetime is enough.
         self._agent_ids: dict[str, str] = {}
 
     async def aclose(self) -> None:
-        await self._client.aclose()
+        for client in self._clients:
+            await client.aclose()
 
     # ---------- transport ----------
 
@@ -59,26 +84,41 @@ class RuntimeClient:
         ``raw=True`` returns the body as text instead of JSON — for the
         workspace file endpoints, which stream raw bytes.
         """
-        try:
-            resp = await self._client.request(method, path, **kwargs)
-        except httpx.HTTPError as exc:
-            raise RuntimeCallError(
-                503, f"runtime unreachable at {self._base_url}: {exc}"
-            ) from exc
-        if resp.status_code >= 400:
-            # 404/409 keep their meaning (not found / session busy) so
-            # callers can react; anything else is an unexpected runtime
-            # failure and maps to 502.
-            status = (
-                resp.status_code if resp.status_code in (404, 409) else 502
-            )
-            raise RuntimeCallError(
-                status,
-                f"runtime {method} {path} -> {resp.status_code}: {resp.text[:200]}",
-            )
-        if resp.status_code == 204 or not resp.content:
-            return None
-        return resp.text if raw else resp.json()
+        n = len(self._clients)
+        start = next(self._rr) % n
+        last_exc: Exception | None = None
+        for i in range(n):
+            client = self._clients[(start + i) % n]
+            try:
+                resp = await client.request(method, path, **kwargs)
+            except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+                # Replica down before the request was delivered — safe
+                # to try the next one for any method, including POSTs.
+                last_exc = exc
+                continue
+            except httpx.HTTPError as exc:
+                raise RuntimeCallError(
+                    503, f"runtime unreachable at {client.base_url}: {exc}"
+                ) from exc
+            if resp.status_code >= 400:
+                # 404/409 keep their meaning (not found / session busy) so
+                # callers can react; anything else is an unexpected runtime
+                # failure and maps to 502.
+                status = (
+                    resp.status_code if resp.status_code in (404, 409) else 502
+                )
+                raise RuntimeCallError(
+                    status,
+                    f"runtime {method} {path} -> {resp.status_code}: {resp.text[:200]}",
+                )
+            if resp.status_code == 204 or not resp.content:
+                return None
+            return resp.text if raw else resp.json()
+        raise RuntimeCallError(
+            503,
+            f"runtime unreachable at all {n} replica(s) "
+            f"({', '.join(self._base_urls)}): {last_exc}",
+        )
 
     # ---------- agents ----------
 
