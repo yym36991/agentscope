@@ -142,6 +142,10 @@ export function WorkbenchPage() {
 	});
 	const [selectedFile, setSelectedFile] = useState('');
 	const [wsPreviewOpen, setWsPreviewOpen] = useState(false);
+	// 服务端导出（md → docx/xlsx，M5）的进行中格式；必须在下面的提前 return
+	// 之前声明——useState 放 return 之后会随加载态改变 hook 数量，触发
+	// "Rendered more hooks than during the previous render"。
+	const [exporting, setExporting] = useState<'docx' | 'xlsx' | null>(null);
 	const wsFileQuery = useQuery({
 		queryKey: ['workspace-file', rid, selectedFile],
 		queryFn: () => api.getWorkspaceFile(rid, selectedFile!),
@@ -224,8 +228,7 @@ export function WorkbenchPage() {
 		URL.revokeObjectURL(url);
 	};
 
-	// 服务端导出（md → docx/xlsx，M5）：拉 blob 存文件
-	const [exporting, setExporting] = useState<'docx' | 'xlsx' | null>(null);
+	// 服务端导出（md → docx/xlsx，M5）：拉 blob 存文件（state 在上方声明）
 	const exportArtifact = async (fmt: 'docx' | 'xlsx') => {
 		const a = previewQuery.data!;
 		setExporting(fmt);
