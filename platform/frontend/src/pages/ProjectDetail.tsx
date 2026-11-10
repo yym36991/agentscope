@@ -170,11 +170,14 @@ export function ProjectDetailPage() {
 	const activeRun = (runs.data ?? []).find(
 		(r) => r.stage === p.current_stage && r.status === 'in_progress',
 	);
-	// 时间线默认聚焦：进行中的阶段，否则最近一个有运行的阶段，否则下一站
+	// 时间线默认聚焦：进行中的阶段，否则可开启的下一站，否则最近一个有运行的阶段。
+	// 审批通过后 current_stage 已推进、上一阶段无活跃运行——此时聚焦下一站，
+	// 「开启」按钮（只对聚焦的 available 阶段显示）才直接可见。
 	const defaultStage =
 		activeRun?.stage ??
+		STAGE_ORDER.find((s) => states[s] === 'available') ??
 		(runs.data ?? []).at(-1)?.stage ??
-		(p.current_stage === 'none' ? 'requirement' : p.current_stage);
+		'requirement';
 	const focus = selectedStage ?? defaultStage;
 	const focusRuns = (runs.data ?? [])
 		.filter((r) => r.stage === focus)
@@ -199,7 +202,7 @@ export function ProjectDetailPage() {
 						<div>
 							<CardTitle className="text-base">项目生命周期</CardTitle>
 							<CardDescription>
-								点击已通过 / 进行中的阶段查看该阶段的各轮运行与产物。
+								点击阶段查看该阶段的各轮运行与产物；下一站在下方直接开启。
 							</CardDescription>
 						</div>
 						{activeRun && (

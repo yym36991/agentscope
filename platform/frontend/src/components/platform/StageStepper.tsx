@@ -122,7 +122,9 @@ export function StageTimeline({
 				const done = state === 'approved';
 				const live = state === 'in_progress' || state === 'under_review';
 				const isSelected = selected === s;
-				const clickable = !!onSelect && (done || live);
+				// available（可开启的下一站）也要能点选聚焦：开启按钮只对聚焦的
+				// available 阶段显示，不让点就永远够不着（审批通过后的推进卡死）。
+				const clickable = !!onSelect && (done || live || state === 'available');
 				return (
 					<Fragment key={s}>
 						{i > 0 && (
